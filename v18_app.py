@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v18.2 全艇スコア解析アプリ（Pure AI・完全データ主導型・体重取得 完璧修正版）
+v18.3 全艇スコア解析アプリ（Pure AI・完全データ主導型・限界突破 爆速版）
 """
 
 import re
@@ -16,15 +16,17 @@ import lightgbm as lgb
 from bs4 import BeautifulSoup
 
 # ============================================================
-# 基礎設定
+# 基礎設定 (限界突破：通信パイプを最大化)
 # ============================================================
 JST = timezone(timedelta(hours=+9), 'JST')
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 req_session = requests.Session()
 req_session.headers.update(UA)
-adapter = requests.adapters.HTTPAdapter(pool_connections=30, pool_maxsize=30, max_retries=3)
+# コネクションプールを50に拡大し、30並列の通信詰まりを完全解消
+adapter = requests.adapters.HTTPAdapter(pool_connections=50, pool_maxsize=50, max_retries=3)
 req_session.mount('https://', adapter)
+req_session.mount('http://', adapter)
 
 JCD_NAME = {
     1:"桐生", 2:"戸田", 3:"江戸川", 4:"平和島", 5:"多摩川", 6:"浜名湖",
@@ -134,12 +136,12 @@ def strategy_label(strategy: str) -> str:
     return {"safe": "安全(2点)", "standard": "標準(4点)", "roi": "回収率重視(6点)", "wide": "広め(9点)"}.get(strategy, strategy)
 
 # ============================================================
-# スクレイピング関数 (Kyotei24専用・空白完全排除ロジック)
+# スクレイピング関数 (爆速 lxml パーサー ＋ 空白完全排除ロジック)
 # ============================================================
 def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
     url = f"https://info.kyotei.fun/info-{dstr}-{jcd:02d}-{rno}.html"
     try:
-        r = req_session.get(url, timeout=10)
+        r = req_session.get(url, timeout=7) # 限界突破：タイムアウトを短縮
         r.encoding = r.apparent_encoding
         html = r.text if r.status_code == 200 else ""
     except:
@@ -148,7 +150,11 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
     if not html or "出走表" not in html:
         return None
 
-    soup = BeautifulSoup(html, "html.parser")
+    # ★限界突破：超高速lxmlエンジンを使用
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except:
+        soup = BeautifulSoup(html, "html.parser")
 
     lane_to_rank = {}
     jyuni_divs = soup.find_all('div', class_='jyuni')
@@ -195,7 +201,6 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
             continue
             
         for i in range(6):
-            # 要素内のテキストを取得し、改行や全角・半角スペースを完全に消去する（最強の防弾処理）
             txt_raw = data_tds[i].get_text(" ", strip=True)
             txt_nospace = txt_raw.replace(' ', '').replace('　', '').replace('\n', '')
             
@@ -210,7 +215,6 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
                 m_cls = re.search(r'([A12B]{2})', txt_nospace)
                 if m_cls: rd[i]["cls"] = cls_map.get(m_cls.group(1), 1)
                 
-                # 空白を完全に排除した txt_nospace から数値を狙い撃ち
                 m_w = re.search(r'(\d+)kg', txt_nospace, re.IGNORECASE)
                 if m_w: rd[i]["weight"] = int(m_w.group(1))
                 
@@ -258,9 +262,9 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
 # ============================================================
 # メインUI
 # ============================================================
-st.set_page_config(page_title="v18.2 Pure AI", layout="wide")
-st.title("🚤 v18.2 全艇スコア解析 (Pure AI)")
-st.caption("完全データ主導型AI / 体重・年齢・階級 完璧抽出版")
+st.set_page_config(page_title="v18.3 Pure AI 爆速版", layout="wide")
+st.title("🚤 v18.3 全艇スコア解析 (Pure AI)")
+st.caption("完全データ主導型AI / 爆速チューニング (lxml+30並列) 搭載版")
 
 if not lgb_model:
     st.warning("⚠️ 学習済みのAIモデルがありません。AIのスコアはすべて0で計算されます。タブ2からデータを収集してモデルを作成してください。")
@@ -352,7 +356,7 @@ with tab2:
                 for r in range(1, 13):
                     tasks.append((dstr, j, r))
                     
-        st.write(f"全 {len(tasks)} レースを解析中...")
+        st.write(f"全 {len(tasks)} レースを解析中（⚡ 30並列爆速モード）...")
         
         def analyze_race(d, j, r):
             res = fetch_kyotei24_data(j, r, d)
@@ -409,7 +413,8 @@ with tab2:
                 "_train_rows": train_rows 
             }
             
-        with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+        # ★限界突破：並列数を15から30に倍増
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
             future_to_task = {executor.submit(analyze_race, d, j, r): (d, j, r) for d, j, r in tasks}
             done_count = 0
             for future in concurrent.futures.as_completed(future_to_task):
