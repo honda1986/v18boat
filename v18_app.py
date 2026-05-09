@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v18.0 全艇スコア解析アプリ（Pure AI・完全データ主導型・回収率重視版）
+v18.1 全艇スコア解析アプリ（Pure AI・完全データ主導型・年齢/体重/階級 取得修正版）
 """
 
 import re
@@ -13,6 +13,7 @@ import pandas as pd
 import requests
 import streamlit as st
 import lightgbm as lgb
+from bs4 import BeautifulSoup
 
 # ============================================================
 # 基礎設定
@@ -58,7 +59,6 @@ def load_lgb_model(filename: str):
     try: return lgb.Booster(model_file=filename)
     except: return None
 
-# 新しい次元に対応するためファイル名をv18専用に変更
 lgb_model   = load_lgb_model('lgb_score_v18.txt')
 prob1_model = load_lgb_model('lgb_p1_v18.txt')
 prob2_model = load_lgb_model('lgb_p2_v18.txt')
@@ -67,7 +67,6 @@ prob3_model = load_lgb_model('lgb_p3_v18.txt')
 def get_lgb_features(r: Racer, lane: int, venue: str) -> list:
     NAME_TO_JCD = {v: k for k, v in JCD_NAME.items()}
     jcd = NAME_TO_JCD.get(venue, 1)
-    # 人間の偏見を排除し、全13項目の純粋な数値をAIに流し込む
     return [
         float(jcd), float(lane), float(r.cls_val), float(r.age), float(r.weight),
         float(r.f_count), float(r.avg_st), float(r.n_win), float(r.n_2ren),
@@ -99,7 +98,6 @@ def rank_all(racers: List[Racer], venue: str) -> Tuple[List[Dict], Optional[floa
 def make_bets(ranked: List[Dict], strategy: str = "roi") -> List[str]:
     if len(ranked) < 4: return []
     
-    # 確率またはスコアでソート
     def get_rate(x, key):
         return x.get(key) if x.get(key) > 0 else x["score"]
 
@@ -113,19 +111,16 @@ def make_bets(ranked: List[Dict], strategy: str = "roi") -> List[str]:
     
     raw = []
     if strategy == "safe": 
-        # 本命2点
         for s in c2[:2]:
             t_cands = [t for t in c3 if t != s]
             if t_cands: raw.append(f"{l1}-{s}-{t_cands[0]}")
     elif strategy == "standard": 
-        # 標準4点
         for s in c2[:2]:
             for t in [t for t in c3 if t != s][:2]: raw.append(f"{l1}-{s}-{t}")
     elif strategy == "roi": 
-        # 回収率重視（中穴カバーの6点）
         for s in c2[:3]:
             for t in [t for t in c3 if t != s][:2]: raw.append(f"{l1}-{s}-{t}")
-    else: # wide
+    else:
         for s in c2[:3]:
             for t in [t for t in c3 if t != s][:3]: raw.append(f"{l1}-{s}-{t}")
 
@@ -139,10 +134,8 @@ def strategy_label(strategy: str) -> str:
     return {"safe": "安全(2点)", "standard": "標準(4点)", "roi": "回収率重視(6点)", "wide": "広め(9点)"}.get(strategy, strategy)
 
 # ============================================================
-# スクレイピング関数 (Kyotei24専用・全情報抽出)
+# スクレイピング関数 (Kyotei24専用・スマート追従ロジック搭載)
 # ============================================================
-from bs4 import BeautifulSoup
-
 def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
     url = f"https://info.kyotei.fun/info-{dstr}-{jcd:02d}-{rno}.html"
     try:
@@ -189,57 +182,77 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
            "st": 0.17, "nw": 0.0, "n2": 0.0, "lw": 0.0, "l2": 0.0, "m2": 0.0, "b2": 0.0} for i in range(6)]
     
     cls_map = {"A1": 4, "A2": 3, "B1": 2, "B2": 1}
+    current_label = "" # 表の結合(rowspan)対策：直前のラベルを記憶する
 
     for tr in soup.find_all('tr'):
         tds = tr.find_all(['td', 'th'])
+        if not tds: continue
+        
+        # 1列目がラベルの場合（7列ある場合）
         if len(tds) >= 7:
-            label = tds[0].get_text(strip=True).replace('\n', '').replace(' ', '')
+            current_label = tds[0].get_text(strip=True).replace('\n', '').replace(' ', '')
+            data_tds = tds[-6:] # 右側の6艇分のデータ
+        # rowspan等でラベル列が省略されている場合（6列しかない場合）は、直前のラベルを引き継ぐ
+        elif len(tds) == 6 and current_label:
+            data_tds = tds
+        else:
+            current_label = ""
+            continue
             
-            if "選手名" in label:
-                for i in range(6):
-                    txt = tds[i+1].get_text(strip=True)
+        for i in range(6):
+            txt = data_tds[i].get_text(" ", strip=True)
+            
+            # --- 選手名・年齢 ---
+            if "選手名" in current_label:
+                m_age = re.search(r'\((\d{2})\)', txt)
+                if m_age:
+                    rd[i]["age"] = int(m_age.group(1))
                     rd[i]["name"] = re.sub(r'[\d\(\)\s]', '', txt)
-                    m_age = re.search(r'\((\d+)\)', txt)
-                    if m_age: rd[i]["age"] = int(m_age.group(1))
-            elif label.startswith("級"):
-                for i in range(6):
-                    m = re.search(r'([A12B]{2})', tds[i+1].get_text(strip=True))
-                    if m: rd[i]["cls"] = cls_map.get(m.group(1), 1)
-            elif "選手情報" in label:
-                for i in range(6):
-                    m = re.search(r'(\d+)kg', tds[i+1].get_text(strip=True))
-                    if m: rd[i]["weight"] = int(m.group(1))
-            elif "全国" in label and "勝率" in label:
-                for i in range(6):
-                    txt = tds[i+1].get_text(strip=True)
-                    m_2 = re.search(r'^([\d\.]+)', txt)
-                    m_w = re.search(r'\(([\d\.]+)\)', txt)
-                    if m_2: rd[i]["n2"] = float(m_2.group(1))/100.0 if float(m_2.group(1))>1.0 else float(m_2.group(1))
-                    if m_w: rd[i]["nw"] = float(m_w.group(1))
-            elif "当地" in label and "勝率" in label:
-                for i in range(6):
-                    txt = tds[i+1].get_text(strip=True)
-                    m_2 = re.search(r'^([\d\.]+)', txt)
-                    m_w = re.search(r'\(([\d\.]+)\)', txt)
-                    if m_2: rd[i]["l2"] = float(m_2.group(1))/100.0 if float(m_2.group(1))>1.0 else float(m_2.group(1))
-                    if m_w: rd[i]["lw"] = float(m_w.group(1))
-            elif "モータ" in label and "2連率" in label:
-                for i in range(6):
-                    m = re.search(r'^([\d\.]+)', tds[i+1].get_text(strip=True))
-                    if m: rd[i]["m2"] = float(m.group(1))/100.0 if float(m.group(1))>1.0 else float(m.group(1))
-            elif "ボート" in label and "2連率" in label:
-                for i in range(6):
-                    m = re.search(r'^([\d\.]+)', tds[i+1].get_text(strip=True))
-                    if m: rd[i]["b2"] = float(m.group(1))/100.0 if float(m.group(1))>1.0 else float(m.group(1))
-            elif "平均ST" in label:
-                for i in range(6):
-                    try: rd[i]["st"] = float(tds[i+1].get_text(strip=True))
-                    except: pass
-            elif "フライング" in label:
-                for i in range(6):
-                    try: rd[i]["f"] = int(tds[i+1].get_text(strip=True))
-                    except: pass
+            
+            # --- 級・体重 ---
+            elif "選手情報" in current_label or "支部" in current_label or "級" in current_label:
+                txt_nospace = txt.replace(' ', '').replace('　', '') # 'A 1' などのスペース対策
+                m_cls = re.search(r'([A12B]{2})', txt_nospace)
+                if m_cls: rd[i]["cls"] = cls_map.get(m_cls.group(1), 1)
+                
+                m_w = re.search(r'(\d{2})kg', txt)
+                if m_w: rd[i]["weight"] = int(m_w.group(1))
+                
+            # --- 全国勝率・2連率 ---
+            elif "全国" in current_label and "勝率" in current_label:
+                m_2 = re.search(r'^([\d\.]+)', txt)
+                m_w = re.search(r'\(([\d\.]+)\)', txt)
+                if m_2: rd[i]["n2"] = float(m_2.group(1))/100.0 if float(m_2.group(1))>1.0 else float(m_2.group(1))
+                if m_w: rd[i]["nw"] = float(m_w.group(1))
+                
+            # --- 当地勝率・2連率 ---
+            elif "当地" in current_label and "勝率" in current_label:
+                m_2 = re.search(r'^([\d\.]+)', txt)
+                m_w = re.search(r'\(([\d\.]+)\)', txt)
+                if m_2: rd[i]["l2"] = float(m_2.group(1))/100.0 if float(m_2.group(1))>1.0 else float(m_2.group(1))
+                if m_w: rd[i]["lw"] = float(m_w.group(1))
+                
+            # --- モーター2連率 ---
+            elif "モータ" in current_label and "2連率" in current_label:
+                m = re.search(r'^([\d\.]+)', txt)
+                if m: rd[i]["m2"] = float(m.group(1))/100.0 if float(m.group(1))>1.0 else float(m.group(1))
+                
+            # --- ボート2連率 ---
+            elif "ボート" in current_label and "2連率" in current_label:
+                m = re.search(r'^([\d\.]+)', txt)
+                if m: rd[i]["b2"] = float(m.group(1))/100.0 if float(m.group(1))>1.0 else float(m.group(1))
+                
+            # --- 平均ST ---
+            elif "平均ST" in current_label:
+                try: rd[i]["st"] = float(txt)
+                except: pass
+                
+            # --- フライング数 ---
+            elif "フライング" in current_label:
+                try: rd[i]["f"] = int(txt)
+                except: pass
 
+    # 万が一全選手の勝率が0（取得失敗）なら無効
     if sum(x["nw"] for x in rd) == 0:
         return None
 
@@ -256,9 +269,9 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
 # ============================================================
 # メインUI
 # ============================================================
-st.set_page_config(page_title="v18.0 Pure AI", layout="wide")
-st.title("🚤 v18.0 全艇スコア解析 (Pure AI)")
-st.caption("完全データ主導型AI / 回収率重視ロジック搭載")
+st.set_page_config(page_title="v18.1 Pure AI", layout="wide")
+st.title("🚤 v18.1 全艇スコア解析 (Pure AI)")
+st.caption("完全データ主導型AI / 年齢・階級・体重データ完全対応版")
 
 if not lgb_model:
     st.warning("⚠️ 学習済みのAIモデルがありません。AIのスコアはすべて0で計算されます。タブ2からデータを収集してモデルを作成してください。")
@@ -301,6 +314,8 @@ with tab1:
                     "2着率(%)": item["2着率"],
                     "3着率(%)": item["3着率"],
                     "階級値": racer.cls_val,
+                    "年齢": racer.age,
+                    "体重": racer.weight,
                     "全国勝率": racer.n_win,
                     "当地勝率": racer.l_win,
                     "モータ2連": racer.m_2ren,
@@ -361,7 +376,6 @@ with tab2:
             
             top_score = ranked[0]["score"]
             
-            # 結果が出ているかどうかの判定
             if not has_result:
                 hit_str = "⏳"
                 payoff_disp = "-"
@@ -374,7 +388,6 @@ with tab2:
                 payoff_disp = payoff
                 hit_amount = payoff if hit else 0
                 
-                # 学習データ生成
                 train_rows = []
                 for i, r_obj in enumerate(racers):
                     lane = i + 1
@@ -417,13 +430,11 @@ with tab2:
                 if res:
                     matches.append(res)
                     
-        # 日付・場・R順にソート
         matches.sort(key=lambda x: (x["日付"], x["場"], x["R"]))
 
         if matches:
             df_bt = pd.DataFrame(matches)
             
-            # 完了しているレースのみで回収率を計算
             finished_races = [m for m in matches if m["的中"] in ["🎯", "❌"]]
             hits = [m for m in finished_races if m["的中"] == "🎯"]
             
@@ -439,7 +450,6 @@ with tab2:
             disp_cols = ["日付", "場", "R", "買い目", "結果", "的中", "払戻金", "AIトップ"]
             st.dataframe(df_bt[disp_cols], use_container_width=True)
             
-            # 学習データエクスポート
             all_train_data = []
             for m in matches:
                 all_train_data.extend(m["_train_rows"])
