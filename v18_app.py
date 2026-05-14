@@ -3,6 +3,7 @@
 v18.8 全艇スコア解析アプリ（買い目ごとの予想的中確率 フィルター搭載版）
 """
 import re
+import json
 import concurrent.futures
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -31,8 +32,18 @@ JCD_NAME = {
 
 @dataclass
 class Racer:
-    name: str; age: int; cls_val: int; weight: int; f_count: int; avg_st: float
-    n_win: float; n_2ren: float; l_win: float; l_2ren: float; m_2ren: float; b_2ren: float
+    name: str
+    age: int
+    cls_val: int
+    weight: int
+    f_count: int
+    avg_st: float
+    n_win: float
+    n_2ren: float
+    l_win: float
+    l_2ren: float
+    m_2ren: float
+    b_2ren: float
 
 def calc_extended_stats(racers: List[Racer]) -> List[Dict]:
     avg_win = sum(r.n_win for r in racers) / 6.0
@@ -85,6 +96,7 @@ def rank_all(racers: List[Racer], venue: str) -> Tuple[List[Dict], Optional[floa
         if prob1_model: p1 = round(prob1_model.predict([features])[0] * 100, 1)
         if prob2_model: p2 = round(prob2_model.predict([features])[0] * 100, 1)
         if prob3_model: p3 = round(prob3_model.predict([features])[0] * 100, 1)
+       
         out.append({"lane": lane, "racer": r, "score": ai_score, "1着率": p1, "2着率": p2, "3着率": p3, "rel": rel_stats[i]})
     out.sort(key=lambda x: x["score"], reverse=True)
     lane1_prob = next((x["1着率"] for x in out if x["lane"] == 1), None)
@@ -98,6 +110,7 @@ def get_bet_probs(ranked: List[Dict]) -> List[Dict]:
     sum_p3 = sum(r["3着率"] for r in ranked) or 1
 
     bet_probs = []
+    
     for r1 in ranked:
         for r2 in ranked:
             if r1["lane"] == r2["lane"]: continue
@@ -110,6 +123,7 @@ def get_bet_probs(ranked: List[Dict]) -> List[Dict]:
                 
                 # 買い目の発生確率(%)
                 prob = norm_p1 * norm_p2 * norm_p3 * 100
+ 
                 bet_probs.append({"bet": f'{r1["lane"]}-{r2["lane"]}-{r3["lane"]}', "prob": round(prob, 2)})
                 
     bet_probs.sort(key=lambda x: x["prob"], reverse=True)
@@ -131,7 +145,8 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
     if len(jyuni_divs) >= 6:
         for i in range(6):
             txt = jyuni_divs[i].get_text(strip=True)
-            if txt.isdigit(): lane_to_rank[i+1] = txt; has_result = True
+            if txt.isdigit(): 
+                lane_to_rank[i+1] = txt; has_result = True
     payoff = 0
     if has_result:
         payoff_div = soup.find('div', class_='race_result_end_label', string=re.compile('3連単'))
@@ -139,6 +154,7 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
             money_span = payoff_div.parent.find('span', class_='race_result_end_money_num')
             if money_span:
                 ptxt = money_span.get_text(strip=True).replace(',', '')
+              
                 if ptxt.isdigit(): payoff = int(ptxt)
     rd = [{"name": f"選手{i+1}", "age": 30, "cls": 1, "weight": 50, "f": 0, "st": 0.17, "nw": 0.0, "n2": 0.0, "lw": 0.0, "l2": 0.0, "m2": 0.0, "b2": 0.0} for i in range(6)]
     cls_map = {"A1": 4, "A2": 3, "B1": 2, "B2": 1}
@@ -155,11 +171,13 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
             if "選手名" in current_label:
                 m_age = re.search(r'\((\d{2})\)', txt_nospace)
                 if m_age: rd[i]["age"] = int(m_age.group(1))
+ 
             elif "選手情報" in current_label or "支部" in current_label or "級" in current_label:
                 m_cls = re.search(r'([A12B]{2})', txt_nospace)
                 if m_cls: rd[i]["cls"] = cls_map.get(m_cls.group(1), 1)
                 m_w = re.search(r'(\d+)kg', txt_nospace, re.IGNORECASE)
-                if m_w: rd[i]["weight"] = int(m_w.group(1))
+                if m_w: 
+                    rd[i]["weight"] = int(m_w.group(1))
             elif "全国" in current_label and "勝率" in current_label:
                 m_2 = re.search(r'^([\d\.]+)', txt_nospace); m_w = re.search(r'\(([\d\.]+)\)', txt_nospace)
                 if m_2: rd[i]["n2"] = float(m_2.group(1))/100.0 if float(m_2.group(1))>1.0 else float(m_2.group(1))
@@ -170,18 +188,21 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
                 if m_w: rd[i]["lw"] = float(m_w.group(1))
             elif "モータ" in current_label and "2連率" in current_label:
                 m = re.search(r'^([\d\.]+)', txt_nospace)
+               
                 if m: rd[i]["m2"] = float(m.group(1))/100.0 if float(m.group(1))>1.0 else float(m.group(1))
             elif "ボート" in current_label and "2連率" in current_label:
                 m = re.search(r'^([\d\.]+)', txt_nospace)
                 if m: rd[i]["b2"] = float(m.group(1))/100.0 if float(m.group(1))>1.0 else float(m.group(1))
             elif "平均ST" in current_label:
+              
                 try: rd[i]["st"] = float(txt_nospace)
                 except: pass
             elif "フライング" in current_label:
                 try: rd[i]["f"] = int(txt_nospace)
                 except: pass
     if sum(x["nw"] for x in rd) == 0: return None
-    racers = [Racer(name=x["name"], age=x["age"], cls_val=x["cls"], weight=x["weight"], f_count=x["f"], avg_st=x["st"], n_win=x["nw"], n_2ren=x["n2"], l_win=x["lw"], l_2ren=x["l2"], m_2ren=x["m2"], b_2ren=x["b2"]) for x in rd]
+    racers = [Racer(name=x["name"], age=x["age"], cls_val=x["cls"], weight=x["weight"], f_count=x["f"], avg_st=x["st"], n_win=x["nw"], n_2ren=x["n2"], 
+    l_win=x["lw"], l_2ren=x["l2"], m_2ren=x["m2"], b_2ren=x["b2"]) for x in rd]
     return racers, lane_to_rank, payoff, has_result
 
 st.set_page_config(page_title="v18.8 買い目確率絞り込み", layout="wide")
@@ -200,6 +221,7 @@ with tab1:
     r_idx = st.selectbox("レース", options=list(range(1, 13)))
     if st.button("🔍 解析開始", type="primary", use_container_width=True):
         dstr = d_input.strftime("%Y%m%d")
+     
         res = fetch_kyotei24_data(v_idx, r_idx, dstr)
         if res:
             racers, _, _, _ = res
@@ -207,10 +229,12 @@ with tab1:
             st.success("解析完了！")
             df_disp = []
             for item in ranked:
+          
                 racer = item["racer"]; rel = item["rel"]
                 df_disp.append({
                     "枠": item["lane"], "選手名": racer.name, "AIスコア": item["score"], "1着率(%)": item["1着率"], "2着率(%)": item["2着率"], "3着率(%)": item["3着率"],
                     "ST": racer.avg_st, "内ST差": f"{rel['st_diff_in']:+.3f}", "外ST差": f"{rel['st_diff_out']:+.3f}",
+                 
                     "勝率": racer.n_win, "勝率(偏差)": f"{rel['win_dev']:+.2f}"
                 })
             st.dataframe(pd.DataFrame(df_disp).set_index("枠"), use_container_width=True)
@@ -218,8 +242,36 @@ with tab1:
             st.subheader("🎯 買い目ごとの予想的中確率 (上位10点)")
             bet_probs = get_bet_probs(ranked)
             for i, bp in enumerate(bet_probs[:10]):
+         
                 # 上位の確率をわかりやすく表示
                 st.write(f"**第{i+1}位** {bp['bet']} : **{bp['prob']}%**")
+
+            # =========================================================
+            # 🔽 ここから下が、自動購入アプリ（キューマスター）用の出力ロジックです 🔽
+            # =========================================================
+            auto_bet_queue = []
+            for bp in bet_probs[:5]:  # 単一レースの場合はとりあえず上位5点を抽出
+                try:
+                    pattern = [int(x) for x in bp['bet'].split("-")]
+                    queue_item = {
+                        "venue": JCD_NAME[v_idx],
+                        "race": str(r_idx),
+                        "pattern": pattern,
+                        "amount": "1"
+                    }
+                    auto_bet_queue.append(queue_item)
+                except:
+                    pass
+
+            if auto_bet_queue:
+                json_string = json.dumps(auto_bet_queue, ensure_ascii=False, indent=4)
+                js_code_output = f"const DEFAULT_QUEUE = {json_string};"
+                
+                st.markdown("---")
+                st.subheader("🤖 全自動購入用データ (上位5点・キューマスター専用)")
+                st.caption("右上のコピーボタンを押して、Tampermonkeyのスクリプトに貼り付けてください。")
+                st.code(js_code_output, language="javascript")
+
         else:
             st.error("出走表が取得できませんでした。")
 
@@ -228,6 +280,7 @@ with tab2:
     with col1: bt_start = st.date_input("開始日 ", value=datetime.now(JST).date() - timedelta(days=1))
     with col2: bt_end = st.date_input("終了日 ", value=datetime.now(JST).date() - timedelta(days=1))
     with col3: bt_venue_idx = st.selectbox("場を指定", options=[0] + list(JCD_NAME.keys()), format_func=lambda x: "全国（すべて）" if x==0 else JCD_NAME[x])
+  
     
     st.markdown("#### 🎯 買い目予想的中確率フィルター")
     st.write("設定した確率以上の買い目のみを購入します。条件を満たす買い目がないレースは自動で見送りになります。")
@@ -251,6 +304,7 @@ with tab2:
             buy_bets = [bp["bet"] for bp in bet_probs if bp["prob"] >= prob_threshold]
             
             if not has_result:
+         
                 hit_str, payoff_disp, actual_result, hit_amount = "⏳", "-", "結果待ち" if buy_bets else "見送り", 0
             else:
                 actual_result = ""
@@ -271,6 +325,7 @@ with tab2:
                 "結果": actual_result, "的中": hit_str, "払戻金": payoff_disp, "_hit_amount": hit_amount
             }
             
+       
         with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
             future_to_task = {executor.submit(analyze_race, d, j, r): (d, j, r) for d, j, r in tasks}
             done_count = 0
@@ -283,6 +338,7 @@ with tab2:
         matches.sort(key=lambda x: (x["日付"], x["場"], x["R"]))
         if matches:
             df_bt = pd.DataFrame(matches)
+        
             bet_races = [m for m in matches if m["点数"] > 0 and m["的中"] in ["🎯", "❌"]]
             hits = [m for m in bet_races if m["的中"] == "🎯"]
             if bet_races:
@@ -292,5 +348,35 @@ with tab2:
                 ret_rate = total_return / total_invest * 100 if total_invest > 0 else 0
                 st.success(f"🔥 勝負レース: {len(bet_races)}件 (見送り: {len([m for m in matches if m['点数']==0])}件)")
                 st.info(f"💰 **総投資**: {total_invest:,}円 / **総回収**: {total_return:,}円 (回収率: {ret_rate:.1f}%)")
+ 
             disp_cols = ["日付", "場", "R", "買い目", "結果", "的中", "払戻金"]
             st.dataframe(df_bt[disp_cols], use_container_width=True)
+
+            # =========================================================
+            # 🔽 ここから下が、自動購入アプリ（キューマスター）用の出力ロジックです 🔽
+            # =========================================================
+            auto_bet_queue = []
+            for index, row in df_bt.iterrows():
+                if row["点数"] > 0 and row["買い目"] != "見":
+                    bets = row["買い目"].split(", ")
+                    for bet in bets:
+                        try:
+                            pattern = [int(x) for x in bet.split("-")]
+                            queue_item = {
+                                "venue": row["場"],
+                                "race": str(row["R"]),
+                                "pattern": pattern,
+                                "amount": "1"
+                            }
+                            auto_bet_queue.append(queue_item)
+                        except:
+                            pass
+            
+            if auto_bet_queue:
+                json_string = json.dumps(auto_bet_queue, ensure_ascii=False, indent=4)
+                js_code_output = f"const DEFAULT_QUEUE = {json_string};"
+                
+                st.markdown("---")
+                st.subheader("🤖 全自動購入用データ (キューマスター専用)")
+                st.caption("右上のコピーボタンを押して、Tampermonkeyのスクリプトに貼り付けてください。")
+                st.code(js_code_output, language="javascript")
