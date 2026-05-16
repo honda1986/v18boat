@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-v19.3 全艇スコア解析アプリ（自動購入用JSON出力キューマスター対応版）
+v20.0 全艇スコア解析アプリ（期待値ハンター・リアルタイムオッズ＆JSON自動購入対応版）
 """
 import re
-import json # 🌟 JSON出力用に新しく追加
+import json
 import concurrent.futures
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -95,26 +95,21 @@ def get_bet_probs(ranked: List[Dict]) -> List[Dict]:
     p1 = {r["lane"]: max(0.1, r["1着率"]) for r in ranked}
     p2 = {r["lane"]: max(0.1, r["2着率"]) for r in ranked}
     p3 = {r["lane"]: max(0.1, r["3着率"]) for r in ranked}
-
     sum1 = sum(p1.values())
     p1 = {k: v / sum1 for k, v in p1.items()}
-
     bet_probs = []
     for l1 in range(1, 7):
         for l2 in range(1, 7):
             if l1 == l2: continue
             for l3 in range(1, 7):
                 if l3 in (l1, l2): continue
-
                 prob_1st = p1[l1]
                 sum2 = sum(p2[k] for k in range(1, 7) if k != l1)
                 prob_2nd = p2[l2] / sum2 if sum2 > 0 else 0
                 sum3 = sum(p3[k] for k in range(1, 7) if k not in (l1, l2))
                 prob_3rd = p3[l3] / sum3 if sum3 > 0 else 0
-
                 prob = prob_1st * prob_2nd * prob_3rd * 100
                 bet_probs.append({"bet": f"{l1}-{l2}-{l3}", "prob": round(prob, 2)})
-                
     bet_probs.sort(key=lambda x: x["prob"], reverse=True)
     return bet_probs
 
@@ -187,66 +182,155 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
     racers = [Racer(name=x["name"], age=x["age"], cls_val=x["cls"], weight=x["weight"], f_count=x["f"], avg_st=x["st"], n_win=x["nw"], n_2ren=x["n2"], l_win=x["lw"], l_2ren=x["l2"], m_2ren=x["m2"], b_2ren=x["b2"]) for x in rd]
     return racers, lane_to_rank, payoff, has_result
 
-st.set_page_config(page_title="v19.3 JSONキューマスター対応", layout="wide")
+# 🌟 NEW: リアルタイムオッズ取得ロジック（軽量外部サイト優先）
+def fetch_realtime_odds(jcd: int, rno: int, dstr: str) -> Dict[str, float]:
+    odds_dict = {}
+    urls = [
+        f"https://kyotei24.jp/odds/{dstr}/{jcd:02d}/{rno}.html",
+        f"http://uchisankaku.sakura.ne.jp/odds?jcd={jcd:02d}&rno={rno}"
+    ]
+    for url in urls:
+        try:
+            r = req_session.get(url, timeout=5)
+            r.encoding = r.apparent_encoding
+            html = r.text
+            # 軽量HTMLから 3連単(1-2-3) と オッズ(15.4) を強引に正規表現でブッコ抜く
+            matches = re.findall(r'([1-6]-[1-6]-[1-6]).*?([1-9]\d{0,3}\.\d)', html, re.DOTALL)
+            if matches:
+                for bet, odds_str in matches:
+                    odds_dict[bet.strip()] = float(odds_str)
+                if len(odds_dict) > 10: 
+                    return odds_dict
+        except:
+            continue
+            
+    # サードパーティが取得失敗した場合の最終保険（ボートレース公式）
+    try:
+        url = f"https://www.boatrace.jp/owpc/pc/race/odds3t?rno={rno}&jcd={jcd:02d}&hd={dstr}"
+        r = req_session.get(url, timeout=5)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        tbody = soup.find_all('tbody', class_='is-p3-0')
+        if tbody:
+            matches = re.findall(r'([1-6]-[1-6]-[1-6]).*?([1-9]\d{0,3}\.\d)', r.text, re.DOTALL)
+            for bet, odds_str in matches:
+                odds_dict[bet.strip()] = float(odds_str)
+    except:
+        pass
+    return odds_dict
 
-# 🌟 サイドバー設定に「1点の購入金額」を追加
-st.sidebar.markdown("### ⚙️ 買い目フィルター設定")
-prob_threshold = st.sidebar.slider("【購入ライン】確率(%)以上", min_value=0.5, max_value=20.0, value=2.5, step=0.5)
-max_bets = st.sidebar.slider("【上限点数】最大(点)まで", min_value=1, max_value=12, value=6, step=1)
+
+st.set_page_config(page_title="v20.0 期待値ハンターAI", layout="wide")
+
+st.sidebar.markdown("### ⚙️ 【直前用】期待値＆資金設定")
+ev_threshold = st.sidebar.slider("【期待値フィルター】回収率が何%以上の買い目を狙うか", min_value=80, max_value=200, value=110, step=5)
+st.sidebar.caption("※100%以上で理論上プラス。推奨は110%以上です。")
+
+st.sidebar.markdown("### ⚙️ 【共通】フィルター設定")
+prob_threshold = st.sidebar.slider("【足切り確率】確率(%)以上", min_value=0.5, max_value=20.0, value=3.0, step=0.5)
+max_bets = st.sidebar.slider("【上限点数】最大(点)まで", min_value=1, max_value=12, value=4, step=1)
 bet_amount = st.sidebar.number_input("【1点の購入金額】(円)", min_value=100, step=100, value=100)
-st.sidebar.caption("※この設定は解析と自動購入データの両方に連動します。")
 
-st.title("🚤 v19.3 全艇スコア解析 (Pure AI)")
-st.caption("完全データ主導型AI / 🤖 JSONキューマスター対応版")
+st.title("🚤 v20.0 期待値ハンター (Pure AI)")
+st.caption("完全データ主導型AI / 📈 直前オッズ連動・期待値100%超えスナイパー機能搭載")
 
 if not lgb_model:
     st.warning("⚠️ v18.7用のAIモデルが見つかりません。")
 
-tab1, tab2 = st.tabs(["🔍 1レース解析 (当日単発用)", "📊 バックテスト＆JSON生成"])
+tab1, tab2 = st.tabs(["🚀 直前・期待値解析 (レース10分前推奨)", "📊 バックテスト (前日・検証用)"])
 
 with tab1:
+    st.markdown("##### 🚨 このタブは「レース直前」に実行してください。現在のリアルタイムオッズを取得し、勝てる（期待値が設定値を超える）買い目だけを抽出します。")
     col1, col2 = st.columns(2)
     with col1: d_input = st.date_input("日付", value=datetime.now(JST).date())
     with col2: v_idx = st.selectbox("場", options=list(JCD_NAME.keys()), format_func=lambda x: JCD_NAME[x])
     r_idx = st.selectbox("レース", options=list(range(1, 13)))
     
-    if st.button("🔍 解析 ＆ 買い目生成", type="primary", use_container_width=True):
+    if st.button("🔍 直前オッズ取得 ＆ 期待値解析", type="primary", use_container_width=True):
         dstr = d_input.strftime("%Y%m%d")
         res = fetch_kyotei24_data(v_idx, r_idx, dstr)
         if res:
             racers, _, _, _ = res
             ranked, _ = rank_all(racers, JCD_NAME[v_idx])
-            st.success("解析完了！")
-            
             bet_probs = get_bet_probs(ranked)
-            filtered_bets = [bp["bet"] for bp in bet_probs if bp["prob"] >= prob_threshold]
-            buy_bets = filtered_bets[:max_bets]
-
-            st.subheader("🤖 単発レース買い目")
-            if buy_bets:
-                st.code(",".join(buy_bets), language="text")
-            else:
-                st.info("※設定した確率条件を満たす買い目がないため「見送り」です。")
-
-            st.markdown("---")
-            df_disp = []
-            for item in ranked:
-                racer = item["racer"]; rel = item["rel"]
-                df_disp.append({
-                    "枠": item["lane"], "選手名": racer.name, "AIスコア": item["score"], "1着率(%)": item["1着率"], "2着率(%)": item["2着率"], "3着率(%)": item["3着率"],
-                    "ST": racer.avg_st, "内ST差": f"{rel['st_diff_in']:+.3f}", "外ST差": f"{rel['st_diff_out']:+.3f}",
-                    "勝率": racer.n_win, "勝率(偏差)": f"{rel['win_dev']:+.2f}"
-                })
-            st.dataframe(pd.DataFrame(df_disp).set_index("枠"), use_container_width=True)
             
-            st.subheader("🎯 買い目ごとの予想的中確率 (上位10点)")
-            for i, bp in enumerate(bet_probs[:10]):
-                is_buy = "✅ 購入" if bp["bet"] in buy_bets else "見送り"
-                st.write(f"**第{i+1}位** {bp['bet']} : **{bp['prob']}%** ({is_buy})")
+            # 🌟 リアルタイムオッズを取得
+            with st.spinner("外部サイトからリアルタイムオッズを取得中..."):
+                realtime_odds = fetch_realtime_odds(v_idx, r_idx, dstr)
+            
+            if not realtime_odds:
+                st.error("オッズの取得に失敗しました。まだオッズが公開されていないか、対象外のレースです。")
+            else:
+                st.success("解析 ＆ オッズ取得 完了！")
+                
+                # 期待値の計算 ( AI確率 × 実際のオッズ )
+                ev_results = []
+                for bp in bet_probs:
+                    bet = bp["bet"]
+                    prob = bp["prob"]
+                    odds = realtime_odds.get(bet, 0.0)
+                    ev = (prob / 100.0) * odds * 100 # 期待値(%)
+                    
+                    if prob >= prob_threshold: # 足切り確率をクリアしたもののみ
+                        ev_results.append({
+                            "bet": bet, "prob": prob, "odds": odds, "ev": round(ev, 1)
+                        })
+                
+                # 期待値が高い順にソートし、フィルターと上限点数を適用
+                ev_results.sort(key=lambda x: x["ev"], reverse=True)
+                buy_bets_data = [item for item in ev_results if item["ev"] >= ev_threshold][:max_bets]
+                buy_bets_list = [item["bet"] for item in buy_bets_data]
+
+                # 🤖 JSON生成ロジック
+                auto_bet_queue = []
+                for bet in buy_bets_list:
+                    try:
+                        pattern = [int(x) for x in bet.split("-")]
+                        auto_bet_queue.append({
+                            "venue": JCD_NAME[v_idx],
+                            "race": str(r_idx),
+                            "pattern": pattern,
+                            "amount": str(bet_amount)
+                        })
+                    except: pass
+
+                st.subheader("🤖 全自動購入用データ (キューマスター専用)")
+                if auto_bet_queue:
+                    st.caption(f"期待値 {ev_threshold}% 以上の買い目が {len(auto_bet_queue)} 点見つかりました。コピーして貼り付けてください。")
+                    st.code(json.dumps(auto_bet_queue, ensure_ascii=False, indent=4), language="json")
+                else:
+                    st.warning(f"※ 現在のオッズでは、期待値が {ev_threshold}% を超える旨味のある買い目はありません（見送り推奨）")
+                
+                st.markdown("---")
+                st.subheader("🎯 買い目別 期待値ランキング")
+                st.write("AIの確率 × 実際のオッズ = 期待値(回収率)。100%を超えていれば、買うだけで理論上プラスになります。")
+                
+                disp_ev = []
+                for item in ev_results[:15]: # 上位15件表示
+                    is_buy = "✅ 購入" if item["bet"] in buy_bets_list else "見送り"
+                    disp_ev.append({
+                        "買い目": item["bet"],
+                        "AI予想確率": f"{item['prob']}%",
+                        "直前オッズ": f"{item['odds']}倍",
+                        "期待値 (EV)": f"{item['ev']}%",
+                        "判定": is_buy
+                    })
+                st.dataframe(pd.DataFrame(disp_ev), use_container_width=True)
+                
+                st.markdown("---")
+                st.subheader("🚤 出走表 AI解析スコア")
+                df_disp = []
+                for item in ranked:
+                    racer = item["racer"]; rel = item["rel"]
+                    df_disp.append({
+                        "枠": item["lane"], "選手名": racer.name, "AIスコア": item["score"], "1着率(%)": item["1着率"], "2着率(%)": item["2着率"], "3着率(%)": item["3着率"],
+                        "ST": racer.avg_st, "内ST差": f"{rel['st_diff_in']:+.3f}", "外ST差": f"{rel['st_diff_out']:+.3f}",
+                    })
+                st.dataframe(pd.DataFrame(df_disp).set_index("枠"), use_container_width=True)
         else:
             st.error("出走表が取得できませんでした。")
 
 with tab2:
+    st.markdown("##### 📝 前日予想による過去の検証（※過去のオッズは取得できないため、確率のみの判定です）")
     col1, col2, col3 = st.columns(3)
     with col1: bt_start = st.date_input("開始日 ", value=datetime.now(JST).date() - timedelta(days=1))
     with col2: bt_end = st.date_input("終了日 ", value=datetime.now(JST).date() - timedelta(days=1))
@@ -259,7 +343,6 @@ with tab2:
         matches = []
         prog = st.progress(0.0)
         tasks = [(dstr, j, r) for dstr in days for j in ([bt_venue_idx] if bt_venue_idx != 0 else list(range(1, 25))) for r in range(1, 13)]
-        st.write(f"全 {len(tasks)} レースを解析中...")
         
         def analyze_race(d, j, r):
             res = fetch_kyotei24_data(j, r, d)
@@ -309,40 +392,11 @@ with tab2:
             hits = [m for m in bet_races if m["的中"] == "🎯"]
             
             if bet_races:
-                total_invest = sum(m["点数"] for m in bet_races if m["的中"] != "⏳") * bet_amount # ここもbet_amountで計算
-                total_return = sum(m["_hit_amount"] for m in bet_races if m["的中"] != "⏳") * (bet_amount / 100) # 払戻もbet_amount比率で計算
+                total_invest = sum(m["点数"] for m in bet_races if m["的中"] != "⏳") * bet_amount
+                total_return = sum(m["_hit_amount"] for m in bet_races if m["的中"] != "⏳") * (bet_amount / 100)
                 hit_rate = len(hits) / len([m for m in bet_races if m["的中"] != "⏳"]) * 100 if len([m for m in bet_races if m["的中"] != "⏳"]) > 0 else 0
                 ret_rate = total_return / total_invest * 100 if total_invest > 0 else 0
                 
                 st.success(f"🔥 勝負対象レース: {len(bet_races)}件 (見送り: {len([m for m in matches if m['点数']==0])}件)")
                 if total_invest > 0:
-                    st.info(f"💰 **総投資**: {total_invest:,.0f}円 / **総回収**: {total_return:,.0f}円 (回収率: {ret_rate:.1f}%)")
-                
-                disp_cols = ["日付", "場", "R", "買い目", "結果", "的中", "払戻金"]
-                st.dataframe(df_bt[disp_cols], use_container_width=True)
-
-                # 🌟 ご指定のJSON生成ロジック
-                auto_bet_queue = []
-                for index, row in df_bt.iterrows():
-                    if row["点数"] > 0 and row["買い目"] != "見":
-                        # 上記で "," 繋ぎで生成しているので split(",") で分割
-                        bets = row["買い目"].split(",")
-                        for bet in bets:
-                            try:
-                                pattern = [int(x) for x in bet.split("-")]
-                                queue_item = {
-                                    "venue": row["場"],
-                                    "race": str(row["R"]),
-                                    "pattern": pattern,
-                                    "amount": str(bet_amount)  # 🌟 サイドバーで設定した金額
-                                }
-                                auto_bet_queue.append(queue_item)
-                            except:
-                                pass
-                
-                if auto_bet_queue:
-                    json_string = json.dumps(auto_bet_queue, ensure_ascii=False, indent=4)
-                    st.markdown("---")
-                    st.subheader("🤖 全自動購入用データ (キューマスター専用)")
-                    st.caption("右上のコピーボタンを押し、テレボート画面のダッシュボードに貼り付けてください。")
-                    st.code(json_string, language="json")
+                    st.info(f"💰 **総
