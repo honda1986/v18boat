@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-v19.2 全艇スコア解析アプリ（タブ2一括コピペ対応 ＆ ハーヴィル理論搭載）
+v19.3 全艇スコア解析アプリ（自動購入用JSON出力キューマスター対応版）
 """
 import re
+import json # 🌟 JSON出力用に新しく追加
 import concurrent.futures
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -186,20 +187,22 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
     racers = [Racer(name=x["name"], age=x["age"], cls_val=x["cls"], weight=x["weight"], f_count=x["f"], avg_st=x["st"], n_win=x["nw"], n_2ren=x["n2"], l_win=x["lw"], l_2ren=x["l2"], m_2ren=x["m2"], b_2ren=x["b2"]) for x in rd]
     return racers, lane_to_rank, payoff, has_result
 
-st.set_page_config(page_title="v19.2 自動購入コピペ全対応版", layout="wide")
+st.set_page_config(page_title="v19.3 JSONキューマスター対応", layout="wide")
 
+# 🌟 サイドバー設定に「1点の購入金額」を追加
 st.sidebar.markdown("### ⚙️ 買い目フィルター設定")
 prob_threshold = st.sidebar.slider("【購入ライン】確率(%)以上", min_value=0.5, max_value=20.0, value=2.5, step=0.5)
 max_bets = st.sidebar.slider("【上限点数】最大(点)まで", min_value=1, max_value=12, value=6, step=1)
-st.sidebar.caption("※この設定は「1レース解析」と「バックテスト」の両方に連動します。")
+bet_amount = st.sidebar.number_input("【1点の購入金額】(円)", min_value=100, step=100, value=100)
+st.sidebar.caption("※この設定は解析と自動購入データの両方に連動します。")
 
-st.title("🚤 v19.2 全艇スコア解析 (Pure AI)")
-st.caption("完全データ主導型AI / 🤖 Lemur Browser 自動購入コピペ枠搭載 (タブ1&2対応)")
+st.title("🚤 v19.3 全艇スコア解析 (Pure AI)")
+st.caption("完全データ主導型AI / 🤖 JSONキューマスター対応版")
 
 if not lgb_model:
     st.warning("⚠️ v18.7用のAIモデルが見つかりません。")
 
-tab1, tab2 = st.tabs(["🔍 1レース解析 (当日単発用)", "📊 バックテスト (全レース一括用)"])
+tab1, tab2 = st.tabs(["🔍 1レース解析 (当日単発用)", "📊 バックテスト＆JSON生成"])
 
 with tab1:
     col1, col2 = st.columns(2)
@@ -219,8 +222,7 @@ with tab1:
             filtered_bets = [bp["bet"] for bp in bet_probs if bp["prob"] >= prob_threshold]
             buy_bets = filtered_bets[:max_bets]
 
-            st.subheader("🤖 自動購入用コピペ枠 (単発レース)")
-            st.caption("右上のコピーボタン（📋）をタップしてスクリプトに貼り付けてください。")
+            st.subheader("🤖 単発レース買い目")
             if buy_bets:
                 st.code(",".join(buy_bets), language="text")
             else:
@@ -250,14 +252,14 @@ with tab2:
     with col2: bt_end = st.date_input("終了日 ", value=datetime.now(JST).date() - timedelta(days=1))
     with col3: bt_venue_idx = st.selectbox("場を指定", options=[0] + list(JCD_NAME.keys()), format_func=lambda x: "全国（すべて）" if x==0 else JCD_NAME[x])
     
-    st.write(f"※ サイドバーの設定（確率: {prob_threshold}%以上, 上限: {max_bets}点）で検証・抽出します。")
+    st.write(f"※ サイドバーの設定（確率: {prob_threshold}%以上, 上限: {max_bets}点, 金額: {bet_amount}円）で抽出します。")
 
-    if st.button("📊 バックテスト実行 ＆ 一括生成", type="primary", use_container_width=True):
+    if st.button("📊 バックテスト実行 ＆ JSON一括生成", type="primary", use_container_width=True):
         days = [(bt_start + timedelta(days=i)).strftime("%Y%m%d") for i in range((bt_end - bt_start).days + 1)]
         matches = []
         prog = st.progress(0.0)
         tasks = [(dstr, j, r) for dstr in days for j in ([bt_venue_idx] if bt_venue_idx != 0 else list(range(1, 25))) for r in range(1, 13)]
-        st.write(f"全 {len(tasks)} レースを解析中（⚡ 30並列爆速モード）...")
+        st.write(f"全 {len(tasks)} レースを解析中...")
         
         def analyze_race(d, j, r):
             res = fetch_kyotei24_data(j, r, d)
@@ -307,27 +309,40 @@ with tab2:
             hits = [m for m in bet_races if m["的中"] == "🎯"]
             
             if bet_races:
-                total_invest = sum(m["点数"] for m in bet_races if m["的中"] != "⏳") * 100
-                total_return = sum(m["_hit_amount"] for m in bet_races if m["的中"] != "⏳")
+                total_invest = sum(m["点数"] for m in bet_races if m["的中"] != "⏳") * bet_amount # ここもbet_amountで計算
+                total_return = sum(m["_hit_amount"] for m in bet_races if m["的中"] != "⏳") * (bet_amount / 100) # 払戻もbet_amount比率で計算
                 hit_rate = len(hits) / len([m for m in bet_races if m["的中"] != "⏳"]) * 100 if len([m for m in bet_races if m["的中"] != "⏳"]) > 0 else 0
                 ret_rate = total_return / total_invest * 100 if total_invest > 0 else 0
                 
                 st.success(f"🔥 勝負対象レース: {len(bet_races)}件 (見送り: {len([m for m in matches if m['点数']==0])}件)")
                 if total_invest > 0:
-                    st.info(f"💰 **総投資**: {total_invest:,}円 / **総回収**: {total_return:,}円 (回収率: {ret_rate:.1f}%)")
+                    st.info(f"💰 **総投資**: {total_invest:,.0f}円 / **総回収**: {total_return:,.0f}円 (回収率: {ret_rate:.1f}%)")
                 
-                # 🌟 タブ2にも自動購入コピペ枠を追加（全対象レース一括）
-                st.markdown("---")
-                st.subheader("🤖 自動購入用コピペ枠 (対象全レース一括)")
-                st.caption("自動ツール側でパースしやすいよう「場,レース,買い目」のカンマ区切りでリスト化しています。右上のボタン（📋）で一括コピー可能です。")
-                
-                copy_lines = []
-                for m in bet_races:
-                    # 例: 戸田,12,1-2-3,1-2-4
-                    copy_lines.append(f"{m['場']},{m['R']},{m['買い目']}")
-                
-                st.code("\n".join(copy_lines), language="text")
-                st.markdown("---")
+                disp_cols = ["日付", "場", "R", "買い目", "結果", "的中", "払戻金"]
+                st.dataframe(df_bt[disp_cols], use_container_width=True)
 
-            disp_cols = ["日付", "場", "R", "買い目", "結果", "的中", "払戻金"]
-            st.dataframe(df_bt[disp_cols], use_container_width=True)
+                # 🌟 ご指定のJSON生成ロジック
+                auto_bet_queue = []
+                for index, row in df_bt.iterrows():
+                    if row["点数"] > 0 and row["買い目"] != "見":
+                        # 上記で "," 繋ぎで生成しているので split(",") で分割
+                        bets = row["買い目"].split(",")
+                        for bet in bets:
+                            try:
+                                pattern = [int(x) for x in bet.split("-")]
+                                queue_item = {
+                                    "venue": row["場"],
+                                    "race": str(row["R"]),
+                                    "pattern": pattern,
+                                    "amount": str(bet_amount)  # 🌟 サイドバーで設定した金額
+                                }
+                                auto_bet_queue.append(queue_item)
+                            except:
+                                pass
+                
+                if auto_bet_queue:
+                    json_string = json.dumps(auto_bet_queue, ensure_ascii=False, indent=4)
+                    st.markdown("---")
+                    st.subheader("🤖 全自動購入用データ (キューマスター専用)")
+                    st.caption("右上のコピーボタンを押し、テレボート画面のダッシュボードに貼り付けてください。")
+                    st.code(json_string, language="json")
