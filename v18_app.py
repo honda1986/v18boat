@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v20.0 全艇スコア解析アプリ（期待値ハンター・リアルタイムオッズ＆JSON自動購入対応版）
+v20.1 全艇スコア解析アプリ（スマホコピペ改行エラー対策＆期待値ハンター版）
 """
 import re
 import json
@@ -182,7 +182,6 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
     racers = [Racer(name=x["name"], age=x["age"], cls_val=x["cls"], weight=x["weight"], f_count=x["f"], avg_st=x["st"], n_win=x["nw"], n_2ren=x["n2"], l_win=x["lw"], l_2ren=x["l2"], m_2ren=x["m2"], b_2ren=x["b2"]) for x in rd]
     return racers, lane_to_rank, payoff, has_result
 
-# 🌟 NEW: リアルタイムオッズ取得ロジック（軽量外部サイト優先）
 def fetch_realtime_odds(jcd: int, rno: int, dstr: str) -> Dict[str, float]:
     odds_dict = {}
     urls = [
@@ -194,7 +193,6 @@ def fetch_realtime_odds(jcd: int, rno: int, dstr: str) -> Dict[str, float]:
             r = req_session.get(url, timeout=5)
             r.encoding = r.apparent_encoding
             html = r.text
-            # 軽量HTMLから 3連単(1-2-3) と オッズ(15.4) を強引に正規表現でブッコ抜く
             matches = re.findall(r'([1-6]-[1-6]-[1-6]).*?([1-9]\d{0,3}\.\d)', html, re.DOTALL)
             if matches:
                 for bet, odds_str in matches:
@@ -203,8 +201,6 @@ def fetch_realtime_odds(jcd: int, rno: int, dstr: str) -> Dict[str, float]:
                     return odds_dict
         except:
             continue
-            
-    # サードパーティが取得失敗した場合の最終保険（ボートレース公式）
     try:
         url = f"https://www.boatrace.jp/owpc/pc/race/odds3t?rno={rno}&jcd={jcd:02d}&hd={dstr}"
         r = req_session.get(url, timeout=5)
@@ -218,20 +214,18 @@ def fetch_realtime_odds(jcd: int, rno: int, dstr: str) -> Dict[str, float]:
         pass
     return odds_dict
 
-
-st.set_page_config(page_title="v20.0 期待値ハンターAI", layout="wide")
+st.set_page_config(page_title="v20.1 期待値ハンターAI", layout="wide")
 
 st.sidebar.markdown("### ⚙️ 【直前用】期待値＆資金設定")
-ev_threshold = st.sidebar.slider("【期待値フィルター】回収率が何%以上の買い目を狙うか", min_value=80, max_value=200, value=110, step=5)
-st.sidebar.caption("※100%以上で理論上プラス。推奨は110%以上です。")
+ev_threshold = st.sidebar.slider("【期待値】回収率が何%以上の買い目を狙うか", min_value=80, max_value=200, value=110, step=5)
 
 st.sidebar.markdown("### ⚙️ 【共通】フィルター設定")
 prob_threshold = st.sidebar.slider("【足切り確率】確率(%)以上", min_value=0.5, max_value=20.0, value=3.0, step=0.5)
 max_bets = st.sidebar.slider("【上限点数】最大(点)まで", min_value=1, max_value=12, value=4, step=1)
 bet_amount = st.sidebar.number_input("【1点の購入金額】(円)", min_value=100, step=100, value=100)
 
-st.title("🚤 v20.0 期待値ハンター (Pure AI)")
-st.caption("完全データ主導型AI / 📈 直前オッズ連動・期待値100%超えスナイパー機能搭載")
+st.title("🚤 v20.1 期待値ハンター (Pure AI)")
+st.caption("完全データ主導型AI / 📈 直前オッズ連動・期待値スナイパー")
 
 if not lgb_model:
     st.warning("⚠️ v18.7用のAIモデルが見つかりません。")
@@ -239,7 +233,7 @@ if not lgb_model:
 tab1, tab2 = st.tabs(["🚀 直前・期待値解析 (レース10分前推奨)", "📊 バックテスト (前日・検証用)"])
 
 with tab1:
-    st.markdown("##### 🚨 このタブは「レース直前」に実行してください。現在のリアルタイムオッズを取得し、勝てる（期待値が設定値を超える）買い目だけを抽出します。")
+    st.markdown("##### 🚨 現在のリアルタイムオッズを取得し、期待値が設定値を超える買い目だけを抽出します。")
     col1, col2 = st.columns(2)
     with col1: d_input = st.date_input("日付", value=datetime.now(JST).date())
     with col2: v_idx = st.selectbox("場", options=list(JCD_NAME.keys()), format_func=lambda x: JCD_NAME[x])
@@ -253,34 +247,28 @@ with tab1:
             ranked, _ = rank_all(racers, JCD_NAME[v_idx])
             bet_probs = get_bet_probs(ranked)
             
-            # 🌟 リアルタイムオッズを取得
             with st.spinner("外部サイトからリアルタイムオッズを取得中..."):
                 realtime_odds = fetch_realtime_odds(v_idx, r_idx, dstr)
             
             if not realtime_odds:
-                st.error("オッズの取得に失敗しました。まだオッズが公開されていないか、対象外のレースです。")
+                st.error("オッズの取得に失敗しました。まだ公開されていないか対象外のレースです。")
             else:
                 st.success("解析 ＆ オッズ取得 完了！")
                 
-                # 期待値の計算 ( AI確率 × 実際のオッズ )
                 ev_results = []
                 for bp in bet_probs:
                     bet = bp["bet"]
                     prob = bp["prob"]
                     odds = realtime_odds.get(bet, 0.0)
-                    ev = (prob / 100.0) * odds * 100 # 期待値(%)
+                    ev = (prob / 100.0) * odds * 100 
                     
-                    if prob >= prob_threshold: # 足切り確率をクリアしたもののみ
-                        ev_results.append({
-                            "bet": bet, "prob": prob, "odds": odds, "ev": round(ev, 1)
-                        })
+                    if prob >= prob_threshold: 
+                        ev_results.append({"bet": bet, "prob": prob, "odds": odds, "ev": round(ev, 1)})
                 
-                # 期待値が高い順にソートし、フィルターと上限点数を適用
                 ev_results.sort(key=lambda x: x["ev"], reverse=True)
                 buy_bets_data = [item for item in ev_results if item["ev"] >= ev_threshold][:max_bets]
                 buy_bets_list = [item["bet"] for item in buy_bets_data]
 
-                # 🤖 JSON生成ロジック
                 auto_bet_queue = []
                 for bet in buy_bets_list:
                     try:
@@ -295,48 +283,32 @@ with tab1:
 
                 st.subheader("🤖 全自動購入用データ (キューマスター専用)")
                 if auto_bet_queue:
-                    st.caption(f"期待値 {ev_threshold}% 以上の買い目が {len(auto_bet_queue)} 点見つかりました。コピーして貼り付けてください。")
                     st.code(json.dumps(auto_bet_queue, ensure_ascii=False, indent=4), language="json")
                 else:
-                    st.warning(f"※ 現在のオッズでは、期待値が {ev_threshold}% を超える旨味のある買い目はありません（見送り推奨）")
+                    st.warning(f"※ 現在のオッズでは期待値が {ev_threshold}% を超える買い目はありません。")
                 
                 st.markdown("---")
                 st.subheader("🎯 買い目別 期待値ランキング")
-                st.write("AIの確率 × 実際のオッズ = 期待値(回収率)。100%を超えていれば、買うだけで理論上プラスになります。")
-                
                 disp_ev = []
-                for item in ev_results[:15]: # 上位15件表示
+                for item in ev_results[:15]: 
                     is_buy = "✅ 購入" if item["bet"] in buy_bets_list else "見送り"
                     disp_ev.append({
                         "買い目": item["bet"],
-                        "AI予想確率": f"{item['prob']}%",
+                        "AI確率": f"{item['prob']}%",
                         "直前オッズ": f"{item['odds']}倍",
-                        "期待値 (EV)": f"{item['ev']}%",
+                        "期待値(EV)": f"{item['ev']}%",
                         "判定": is_buy
                     })
                 st.dataframe(pd.DataFrame(disp_ev), use_container_width=True)
-                
-                st.markdown("---")
-                st.subheader("🚤 出走表 AI解析スコア")
-                df_disp = []
-                for item in ranked:
-                    racer = item["racer"]; rel = item["rel"]
-                    df_disp.append({
-                        "枠": item["lane"], "選手名": racer.name, "AIスコア": item["score"], "1着率(%)": item["1着率"], "2着率(%)": item["2着率"], "3着率(%)": item["3着率"],
-                        "ST": racer.avg_st, "内ST差": f"{rel['st_diff_in']:+.3f}", "外ST差": f"{rel['st_diff_out']:+.3f}",
-                    })
-                st.dataframe(pd.DataFrame(df_disp).set_index("枠"), use_container_width=True)
         else:
             st.error("出走表が取得できませんでした。")
 
 with tab2:
-    st.markdown("##### 📝 前日予想による過去の検証（※過去のオッズは取得できないため、確率のみの判定です）")
+    st.markdown("##### 📝 前日予想による過去の検証（確率のみの判定です）")
     col1, col2, col3 = st.columns(3)
     with col1: bt_start = st.date_input("開始日 ", value=datetime.now(JST).date() - timedelta(days=1))
     with col2: bt_end = st.date_input("終了日 ", value=datetime.now(JST).date() - timedelta(days=1))
     with col3: bt_venue_idx = st.selectbox("場を指定", options=[0] + list(JCD_NAME.keys()), format_func=lambda x: "全国（すべて）" if x==0 else JCD_NAME[x])
-    
-    st.write(f"※ サイドバーの設定（確率: {prob_threshold}%以上, 上限: {max_bets}点, 金額: {bet_amount}円）で抽出します。")
 
     if st.button("📊 バックテスト実行 ＆ JSON一括生成", type="primary", use_container_width=True):
         days = [(bt_start + timedelta(days=i)).strftime("%Y%m%d") for i in range((bt_end - bt_start).days + 1)]
@@ -394,9 +366,39 @@ with tab2:
             if bet_races:
                 total_invest = sum(m["点数"] for m in bet_races if m["的中"] != "⏳") * bet_amount
                 total_return = sum(m["_hit_amount"] for m in bet_races if m["的中"] != "⏳") * (bet_amount / 100)
-                hit_rate = len(hits) / len([m for m in bet_races if m["的中"] != "⏳"]) * 100 if len([m for m in bet_races if m["的中"] != "⏳"]) > 0 else 0
-                ret_rate = total_return / total_invest * 100 if total_invest > 0 else 0
                 
-                st.success(f"🔥 勝負対象レース: {len(bet_races)}件 (見送り: {len([m for m in matches if m['点数']==0])}件)")
+                # エラー対策：表示用の文字列を細かく変数に分けて構成
+                target_cnt = len(bet_races)
+                skip_cnt = len([m for m in matches if m['点数']==0])
+                msg_success = f"🔥 勝負対象: {target_cnt}件 (見送り: {skip_cnt}件)"
+                st.success(msg_success)
+
                 if total_invest > 0:
-                    st.info(f"💰 **総
+                    ret_rate = (total_return / total_invest) * 100
+                    inv_str = f"💰 **総投資**: {total_invest:,.0f}円"
+                    ret_str = f"**総回収**: {total_return:,.0f}円"
+                    rate_str = f"(回収率: {ret_rate:.1f}%)"
+                    st.info(f"{inv_str} / {ret_str} {rate_str}")
+                
+                disp_cols = ["日付", "場", "R", "買い目", "結果", "的中", "払戻金"]
+                st.dataframe(df_bt[disp_cols], use_container_width=True)
+
+                auto_bet_queue = []
+                for index, row in df_bt.iterrows():
+                    if row["点数"] > 0 and row["買い目"] != "見":
+                        bets = row["買い目"].split(",")
+                        for bet in bets:
+                            try:
+                                pattern = [int(x) for x in bet.split("-")]
+                                auto_bet_queue.append({
+                                    "venue": row["場"],
+                                    "race": str(row["R"]),
+                                    "pattern": pattern,
+                                    "amount": str(bet_amount)
+                                })
+                            except: pass
+                
+                if auto_bet_queue:
+                    st.markdown("---")
+                    st.subheader("🤖 全自動購入用データ")
+                    st.code(json.dumps(auto_bet_queue, ensure_ascii=False, indent=4), language="json")
