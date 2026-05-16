@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-v18.8 全艇スコア解析アプリ（買い目ごとの予想的中確率 フィルター搭載版）
+v18.9 全艇スコア解析アプリ（条件付き確率/ハーヴィル理論 搭載版）
 """
 import re
-import json
 import concurrent.futures
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -32,18 +31,8 @@ JCD_NAME = {
 
 @dataclass
 class Racer:
-    name: str
-    age: int
-    cls_val: int
-    weight: int
-    f_count: int
-    avg_st: float
-    n_win: float
-    n_2ren: float
-    l_win: float
-    l_2ren: float
-    m_2ren: float
-    b_2ren: float
+    name: str; age: int; cls_val: int; weight: int; f_count: int; avg_st: float
+    n_win: float; n_2ren: float; l_win: float; l_2ren: float; m_2ren: float; b_2ren: float
 
 def calc_extended_stats(racers: List[Racer]) -> List[Dict]:
     avg_win = sum(r.n_win for r in racers) / 6.0
@@ -71,6 +60,7 @@ def load_lgb_model(filename: str):
     try: return lgb.Booster(model_file=filename)
     except: return None
 
+# 学習済みのv18.7（一番賢い展開予想AI）を読み込む
 lgb_model   = load_lgb_model('lgb_score_v18_7.txt')
 prob1_model = load_lgb_model('lgb_p1_v18_7.txt')
 prob2_model = load_lgb_model('lgb_p2_v18_7.txt')
@@ -96,31 +86,45 @@ def rank_all(racers: List[Racer], venue: str) -> Tuple[List[Dict], Optional[floa
         if prob1_model: p1 = round(prob1_model.predict([features])[0] * 100, 1)
         if prob2_model: p2 = round(prob2_model.predict([features])[0] * 100, 1)
         if prob3_model: p3 = round(prob3_model.predict([features])[0] * 100, 1)
-       
         out.append({"lane": lane, "racer": r, "score": ai_score, "1着率": p1, "2着率": p2, "3着率": p3, "rel": rel_stats[i]})
     out.sort(key=lambda x: x["score"], reverse=True)
     lane1_prob = next((x["1着率"] for x in out if x["lane"] == 1), None)
     return out, lane1_prob
 
+# 🌟 NEW: 条件付き確率（ハーヴィル理論応用）による超高精度・買い目確率計算
 def get_bet_probs(ranked: List[Dict]) -> List[Dict]:
-    sum_p1 = sum(r["1着率"] for r in ranked) or 1
-    sum_p2 = sum(r["2着率"] for r in ranked) or 1
-    sum_p3 = sum(r["3着率"] for r in ranked) or 1
+    # 各AIモデルが出した純粋な確率を取得（0除算防止のため最低0.1%を担保）
+    p1 = {r["lane"]: max(0.1, r["1着率"]) for r in ranked}
+    p2 = {r["lane"]: max(0.1, r["2着率"]) for r in ranked}
+    p3 = {r["lane"]: max(0.1, r["3着率"]) for r in ranked}
+
+    # 1着の確率を合計100%に正規化
+    sum1 = sum(p1.values())
+    p1 = {k: v / sum1 for k, v in p1.items()}
 
     bet_probs = []
     
-    for r1 in ranked:
-        for r2 in ranked:
-            if r1["lane"] == r2["lane"]: continue
-            for r3 in ranked:
-                if r3["lane"] in (r1["lane"], r2["lane"]): continue
-                
-                norm_p1 = r1["1着率"] / sum_p1
-                norm_p2 = r2["2着率"] / sum_p2
-                norm_p3 = r3["3着率"] / sum_p3
-                
-                prob = norm_p1 * norm_p2 * norm_p3 * 100
-                bet_probs.append({"bet": f'{r1["lane"]}-{r2["lane"]}-{r3["lane"]}', "prob": round(prob, 2)})
+    # 全120通りの買い目をシミュレーション
+    for l1 in range(1, 7):
+        for l2 in range(1, 7):
+            if l1 == l2: continue
+            for l3 in range(1, 7):
+                if l3 in (l1, l2): continue
+
+                # ① l1が1着になる確率
+                prob_1st = p1[l1]
+
+                # ② l1が1着になった世界線で、残りの5艇の中からl2が2着になる確率
+                sum2 = sum(p2[k] for k in range(1, 7) if k != l1)
+                prob_2nd = p2[l2] / sum2 if sum2 > 0 else 0
+
+                # ③ l1とl2が上位に抜けた世界線で、残りの4艇の中からl3が3着になる確率
+                sum3 = sum(p3[k] for k in range(1, 7) if k not in (l1, l2))
+                prob_3rd = p3[l3] / sum3 if sum3 > 0 else 0
+
+                # 最終的な合成確率(%)
+                prob = prob_1st * prob_2nd * prob_3rd * 100
+                bet_probs.append({"bet": f"{l1}-{l2}-{l3}", "prob": round(prob, 2)})
                 
     bet_probs.sort(key=lambda x: x["prob"], reverse=True)
     return bet_probs
@@ -141,8 +145,7 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
     if len(jyuni_divs) >= 6:
         for i in range(6):
             txt = jyuni_divs[i].get_text(strip=True)
-            if txt.isdigit(): 
-                lane_to_rank[i+1] = txt; has_result = True
+            if txt.isdigit(): lane_to_rank[i+1] = txt; has_result = True
     payoff = 0
     if has_result:
         payoff_div = soup.find('div', class_='race_result_end_label', string=re.compile('3連単'))
@@ -192,18 +195,12 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
                 try: rd[i]["f"] = int(txt_nospace)
                 except: pass
     if sum(x["nw"] for x in rd) == 0: return None
-    racers = [Racer(name=x["name"], age=x["age"], cls_val=x["cls"], weight=x["weight"], f_count=x["f"], avg_st=x["st"], n_win=x["nw"], n_2ren=x["n2"], 
-    l_win=x["lw"], l_2ren=x["l2"], m_2ren=x["m2"], b_2ren=x["b2"]) for x in rd]
+    racers = [Racer(name=x["name"], age=x["age"], cls_val=x["cls"], weight=x["weight"], f_count=x["f"], avg_st=x["st"], n_win=x["nw"], n_2ren=x["n2"], l_win=x["lw"], l_2ren=x["l2"], m_2ren=x["m2"], b_2ren=x["b2"]) for x in rd]
     return racers, lane_to_rank, payoff, has_result
 
-st.set_page_config(page_title="v18.8 買い目確率絞り込み", layout="wide")
-st.title("🚤 v18.8 全艇スコア解析 (Pure AI)")
-st.caption("完全データ主導型AI / 🎯 買い目ごとの予想的中確率 フィルター搭載")
-
-# 🌟 NEW: サイドバーに自動購入の金額設定を追加
-st.sidebar.header("🤖 自動購入（キューマスター）設定")
-bet_amount = st.sidebar.number_input("1点あたりの購入金額 (1 = 100円)", min_value=1, max_value=1000, value=1, step=1)
-st.sidebar.caption("※ここで設定した金額が、出力されるコピペ用データに自動反映されます。")
+st.set_page_config(page_title="v18.9 買い目確率絞り込み(精度向上)", layout="wide")
+st.title("🚤 v18.9 全艇スコア解析 (Pure AI)")
+st.caption("完全データ主導型AI / 🎯 買い目ごとの予想的中確率 (ハーヴィル理論搭載)")
 
 if not lgb_model:
     st.warning("⚠️ v18.7用のAIモデルが見つかりません。")
@@ -217,7 +214,6 @@ with tab1:
     r_idx = st.selectbox("レース", options=list(range(1, 13)))
     if st.button("🔍 解析開始", type="primary", use_container_width=True):
         dstr = d_input.strftime("%Y%m%d")
-     
         res = fetch_kyotei24_data(v_idx, r_idx, dstr)
         if res:
             racers, _, _, _ = res
@@ -237,29 +233,6 @@ with tab1:
             bet_probs = get_bet_probs(ranked)
             for i, bp in enumerate(bet_probs[:10]):
                 st.write(f"**第{i+1}位** {bp['bet']} : **{bp['prob']}%**")
-
-            # === 全自動購入用データの生成 ===
-            auto_bet_queue = []
-            for bp in bet_probs[:5]:
-                try:
-                    pattern = [int(x) for x in bp['bet'].split("-")]
-                    queue_item = {
-                        "venue": JCD_NAME[v_idx],
-                        "race": str(r_idx),
-                        "pattern": pattern,
-                        "amount": str(bet_amount)  # 🌟 サイドバーで設定した金額を変数として組み込む
-                    }
-                    auto_bet_queue.append(queue_item)
-                except:
-                    pass
-
-            if auto_bet_queue:
-                json_string = json.dumps(auto_bet_queue, ensure_ascii=False, indent=4)
-                st.markdown("---")
-                st.subheader("🤖 全自動購入用データ (上位5点)")
-                st.caption("右上のコピーボタンを押し、テレボート画面のダッシュボードに貼り付けてください。")
-                st.code(json_string, language="json")
-
         else:
             st.error("出走表が取得できませんでした。")
 
@@ -268,7 +241,7 @@ with tab2:
     with col1: bt_start = st.date_input("開始日 ", value=datetime.now(JST).date() - timedelta(days=1))
     with col2: bt_end = st.date_input("終了日 ", value=datetime.now(JST).date() - timedelta(days=1))
     with col3: bt_venue_idx = st.selectbox("場を指定", options=[0] + list(JCD_NAME.keys()), format_func=lambda x: "全国（すべて）" if x==0 else JCD_NAME[x])
-  
+    
     st.markdown("#### 🎯 買い目予想的中確率フィルター")
     st.write("設定した確率以上の買い目のみを購入します。条件を満たす買い目がないレースは自動で見送りになります。")
     prob_threshold = st.slider("【購入ライン】買い目の予想確率が何%以上のものを買うか", min_value=0.5, max_value=20.0, value=3.0, step=0.5)
@@ -331,31 +304,5 @@ with tab2:
                 ret_rate = total_return / total_invest * 100 if total_invest > 0 else 0
                 st.success(f"🔥 勝負レース: {len(bet_races)}件 (見送り: {len([m for m in matches if m['点数']==0])}件)")
                 st.info(f"💰 **総投資**: {total_invest:,}円 / **総回収**: {total_return:,}円 (回収率: {ret_rate:.1f}%)")
- 
             disp_cols = ["日付", "場", "R", "買い目", "結果", "的中", "払戻金"]
             st.dataframe(df_bt[disp_cols], use_container_width=True)
-
-            # === 全自動購入用データの生成 ===
-            auto_bet_queue = []
-            for index, row in df_bt.iterrows():
-                if row["点数"] > 0 and row["買い目"] != "見":
-                    bets = row["買い目"].split(", ")
-                    for bet in bets:
-                        try:
-                            pattern = [int(x) for x in bet.split("-")]
-                            queue_item = {
-                                "venue": row["場"],
-                                "race": str(row["R"]),
-                                "pattern": pattern,
-                                "amount": str(bet_amount)  # 🌟 サイドバーで設定した金額を変数として組み込む
-                            }
-                            auto_bet_queue.append(queue_item)
-                        except:
-                            pass
-            
-            if auto_bet_queue:
-                json_string = json.dumps(auto_bet_queue, ensure_ascii=False, indent=4)
-                st.markdown("---")
-                st.subheader("🤖 全自動購入用データ (キューマスター専用)")
-                st.caption("右上のコピーボタンを押し、テレボート画面のダッシュボードに貼り付けてください。")
-                st.code(json_string, language="json")
