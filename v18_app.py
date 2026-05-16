@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v18.9 全艇スコア解析アプリ（条件付き確率/ハーヴィル理論 搭載版）
+v19.2 全艇スコア解析アプリ（タブ2一括コピペ対応 ＆ ハーヴィル理論搭載）
 """
 import re
 import concurrent.futures
@@ -60,7 +60,6 @@ def load_lgb_model(filename: str):
     try: return lgb.Booster(model_file=filename)
     except: return None
 
-# 学習済みのv18.7（一番賢い展開予想AI）を読み込む
 lgb_model   = load_lgb_model('lgb_score_v18_7.txt')
 prob1_model = load_lgb_model('lgb_p1_v18_7.txt')
 prob2_model = load_lgb_model('lgb_p2_v18_7.txt')
@@ -91,38 +90,27 @@ def rank_all(racers: List[Racer], venue: str) -> Tuple[List[Dict], Optional[floa
     lane1_prob = next((x["1着率"] for x in out if x["lane"] == 1), None)
     return out, lane1_prob
 
-# 🌟 NEW: 条件付き確率（ハーヴィル理論応用）による超高精度・買い目確率計算
 def get_bet_probs(ranked: List[Dict]) -> List[Dict]:
-    # 各AIモデルが出した純粋な確率を取得（0除算防止のため最低0.1%を担保）
     p1 = {r["lane"]: max(0.1, r["1着率"]) for r in ranked}
     p2 = {r["lane"]: max(0.1, r["2着率"]) for r in ranked}
     p3 = {r["lane"]: max(0.1, r["3着率"]) for r in ranked}
 
-    # 1着の確率を合計100%に正規化
     sum1 = sum(p1.values())
     p1 = {k: v / sum1 for k, v in p1.items()}
 
     bet_probs = []
-    
-    # 全120通りの買い目をシミュレーション
     for l1 in range(1, 7):
         for l2 in range(1, 7):
             if l1 == l2: continue
             for l3 in range(1, 7):
                 if l3 in (l1, l2): continue
 
-                # ① l1が1着になる確率
                 prob_1st = p1[l1]
-
-                # ② l1が1着になった世界線で、残りの5艇の中からl2が2着になる確率
                 sum2 = sum(p2[k] for k in range(1, 7) if k != l1)
                 prob_2nd = p2[l2] / sum2 if sum2 > 0 else 0
-
-                # ③ l1とl2が上位に抜けた世界線で、残りの4艇の中からl3が3着になる確率
                 sum3 = sum(p3[k] for k in range(1, 7) if k not in (l1, l2))
                 prob_3rd = p3[l3] / sum3 if sum3 > 0 else 0
 
-                # 最終的な合成確率(%)
                 prob = prob_1st * prob_2nd * prob_3rd * 100
                 bet_probs.append({"bet": f"{l1}-{l2}-{l3}", "prob": round(prob, 2)})
                 
@@ -198,27 +186,47 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
     racers = [Racer(name=x["name"], age=x["age"], cls_val=x["cls"], weight=x["weight"], f_count=x["f"], avg_st=x["st"], n_win=x["nw"], n_2ren=x["n2"], l_win=x["lw"], l_2ren=x["l2"], m_2ren=x["m2"], b_2ren=x["b2"]) for x in rd]
     return racers, lane_to_rank, payoff, has_result
 
-st.set_page_config(page_title="v18.9 買い目確率絞り込み(精度向上)", layout="wide")
-st.title("🚤 v18.9 全艇スコア解析 (Pure AI)")
-st.caption("完全データ主導型AI / 🎯 買い目ごとの予想的中確率 (ハーヴィル理論搭載)")
+st.set_page_config(page_title="v19.2 自動購入コピペ全対応版", layout="wide")
+
+st.sidebar.markdown("### ⚙️ 買い目フィルター設定")
+prob_threshold = st.sidebar.slider("【購入ライン】確率(%)以上", min_value=0.5, max_value=20.0, value=2.5, step=0.5)
+max_bets = st.sidebar.slider("【上限点数】最大(点)まで", min_value=1, max_value=12, value=6, step=1)
+st.sidebar.caption("※この設定は「1レース解析」と「バックテスト」の両方に連動します。")
+
+st.title("🚤 v19.2 全艇スコア解析 (Pure AI)")
+st.caption("完全データ主導型AI / 🤖 Lemur Browser 自動購入コピペ枠搭載 (タブ1&2対応)")
 
 if not lgb_model:
     st.warning("⚠️ v18.7用のAIモデルが見つかりません。")
 
-tab1, tab2 = st.tabs(["🔍 1レース解析", "📊 バックテスト & 確率フィルター"])
+tab1, tab2 = st.tabs(["🔍 1レース解析 (当日単発用)", "📊 バックテスト (全レース一括用)"])
 
 with tab1:
     col1, col2 = st.columns(2)
     with col1: d_input = st.date_input("日付", value=datetime.now(JST).date())
     with col2: v_idx = st.selectbox("場", options=list(JCD_NAME.keys()), format_func=lambda x: JCD_NAME[x])
     r_idx = st.selectbox("レース", options=list(range(1, 13)))
-    if st.button("🔍 解析開始", type="primary", use_container_width=True):
+    
+    if st.button("🔍 解析 ＆ 買い目生成", type="primary", use_container_width=True):
         dstr = d_input.strftime("%Y%m%d")
         res = fetch_kyotei24_data(v_idx, r_idx, dstr)
         if res:
             racers, _, _, _ = res
             ranked, _ = rank_all(racers, JCD_NAME[v_idx])
             st.success("解析完了！")
+            
+            bet_probs = get_bet_probs(ranked)
+            filtered_bets = [bp["bet"] for bp in bet_probs if bp["prob"] >= prob_threshold]
+            buy_bets = filtered_bets[:max_bets]
+
+            st.subheader("🤖 自動購入用コピペ枠 (単発レース)")
+            st.caption("右上のコピーボタン（📋）をタップしてスクリプトに貼り付けてください。")
+            if buy_bets:
+                st.code(",".join(buy_bets), language="text")
+            else:
+                st.info("※設定した確率条件を満たす買い目がないため「見送り」です。")
+
+            st.markdown("---")
             df_disp = []
             for item in ranked:
                 racer = item["racer"]; rel = item["rel"]
@@ -230,9 +238,9 @@ with tab1:
             st.dataframe(pd.DataFrame(df_disp).set_index("枠"), use_container_width=True)
             
             st.subheader("🎯 買い目ごとの予想的中確率 (上位10点)")
-            bet_probs = get_bet_probs(ranked)
             for i, bp in enumerate(bet_probs[:10]):
-                st.write(f"**第{i+1}位** {bp['bet']} : **{bp['prob']}%**")
+                is_buy = "✅ 購入" if bp["bet"] in buy_bets else "見送り"
+                st.write(f"**第{i+1}位** {bp['bet']} : **{bp['prob']}%** ({is_buy})")
         else:
             st.error("出走表が取得できませんでした。")
 
@@ -242,16 +250,15 @@ with tab2:
     with col2: bt_end = st.date_input("終了日 ", value=datetime.now(JST).date() - timedelta(days=1))
     with col3: bt_venue_idx = st.selectbox("場を指定", options=[0] + list(JCD_NAME.keys()), format_func=lambda x: "全国（すべて）" if x==0 else JCD_NAME[x])
     
-    st.markdown("#### 🎯 買い目予想的中確率フィルター")
-    st.write("設定した確率以上の買い目のみを購入します。条件を満たす買い目がないレースは自動で見送りになります。")
-    prob_threshold = st.slider("【購入ライン】買い目の予想確率が何%以上のものを買うか", min_value=0.5, max_value=20.0, value=3.0, step=0.5)
+    st.write(f"※ サイドバーの設定（確率: {prob_threshold}%以上, 上限: {max_bets}点）で検証・抽出します。")
 
-    if st.button("📊 バックテスト実行", type="primary", use_container_width=True):
+    if st.button("📊 バックテスト実行 ＆ 一括生成", type="primary", use_container_width=True):
         days = [(bt_start + timedelta(days=i)).strftime("%Y%m%d") for i in range((bt_end - bt_start).days + 1)]
         matches = []
         prog = st.progress(0.0)
         tasks = [(dstr, j, r) for dstr in days for j in ([bt_venue_idx] if bt_venue_idx != 0 else list(range(1, 25))) for r in range(1, 13)]
-        st.write(f"全 {len(tasks)} レースを解析中...")
+        st.write(f"全 {len(tasks)} レースを解析中（⚡ 30並列爆速モード）...")
+        
         def analyze_race(d, j, r):
             res = fetch_kyotei24_data(j, r, d)
             if not res: return None
@@ -260,7 +267,8 @@ with tab2:
             ranked, _ = rank_all(racers, venue_name)
             
             bet_probs = get_bet_probs(ranked)
-            buy_bets = [bp["bet"] for bp in bet_probs if bp["prob"] >= prob_threshold]
+            filtered_bets = [bp["bet"] for bp in bet_probs if bp["prob"] >= prob_threshold]
+            buy_bets = filtered_bets[:max_bets]
             
             if not has_result:
                 hit_str, payoff_disp, actual_result, hit_amount = "⏳", "-", "結果待ち" if buy_bets else "見送り", 0
@@ -279,7 +287,7 @@ with tab2:
             
             return {
                 "日付": d, "場": venue_name, "R": r,
-                "買い目": ", ".join(buy_bets) if buy_bets else "見", "点数": len(buy_bets), 
+                "買い目": ",".join(buy_bets) if buy_bets else "見", "点数": len(buy_bets), 
                 "結果": actual_result, "的中": hit_str, "払戻金": payoff_disp, "_hit_amount": hit_amount
             }
             
@@ -295,14 +303,31 @@ with tab2:
         matches.sort(key=lambda x: (x["日付"], x["場"], x["R"]))
         if matches:
             df_bt = pd.DataFrame(matches)
-            bet_races = [m for m in matches if m["点数"] > 0 and m["的中"] in ["🎯", "❌"]]
+            bet_races = [m for m in matches if m["点数"] > 0 and m["的中"] in ["🎯", "❌", "⏳"]]
             hits = [m for m in bet_races if m["的中"] == "🎯"]
+            
             if bet_races:
-                total_invest = sum(m["点数"] for m in bet_races) * 100
-                total_return = sum(m["_hit_amount"] for m in bet_races)
-                hit_rate = len(hits) / len(bet_races) * 100
+                total_invest = sum(m["点数"] for m in bet_races if m["的中"] != "⏳") * 100
+                total_return = sum(m["_hit_amount"] for m in bet_races if m["的中"] != "⏳")
+                hit_rate = len(hits) / len([m for m in bet_races if m["的中"] != "⏳"]) * 100 if len([m for m in bet_races if m["的中"] != "⏳"]) > 0 else 0
                 ret_rate = total_return / total_invest * 100 if total_invest > 0 else 0
-                st.success(f"🔥 勝負レース: {len(bet_races)}件 (見送り: {len([m for m in matches if m['点数']==0])}件)")
-                st.info(f"💰 **総投資**: {total_invest:,}円 / **総回収**: {total_return:,}円 (回収率: {ret_rate:.1f}%)")
+                
+                st.success(f"🔥 勝負対象レース: {len(bet_races)}件 (見送り: {len([m for m in matches if m['点数']==0])}件)")
+                if total_invest > 0:
+                    st.info(f"💰 **総投資**: {total_invest:,}円 / **総回収**: {total_return:,}円 (回収率: {ret_rate:.1f}%)")
+                
+                # 🌟 タブ2にも自動購入コピペ枠を追加（全対象レース一括）
+                st.markdown("---")
+                st.subheader("🤖 自動購入用コピペ枠 (対象全レース一括)")
+                st.caption("自動ツール側でパースしやすいよう「場,レース,買い目」のカンマ区切りでリスト化しています。右上のボタン（📋）で一括コピー可能です。")
+                
+                copy_lines = []
+                for m in bet_races:
+                    # 例: 戸田,12,1-2-3,1-2-4
+                    copy_lines.append(f"{m['場']},{m['R']},{m['買い目']}")
+                
+                st.code("\n".join(copy_lines), language="text")
+                st.markdown("---")
+
             disp_cols = ["日付", "場", "R", "買い目", "結果", "的中", "払戻金"]
             st.dataframe(df_bt[disp_cols], use_container_width=True)
