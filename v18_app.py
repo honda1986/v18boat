@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v20.8 全艇スコア解析アプリ（文字切れ絶対回避・短文分割版）
+v20.9 全艇スコア解析アプリ（コピペ完全破壊耐性・デバッグ版）
 """
 import re
 import json
@@ -21,22 +21,35 @@ ua_str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 req_session = requests.Session()
 req_session.headers.update({"User-Agent": ua_str})
 
-adapter = requests.adapters.HTTPAdapter(
-    pool_connections=50,
-    pool_maxsize=50,
-    max_retries=3
-)
+adapter = requests.adapters.HTTPAdapter(pool_connections=50, pool_maxsize=50, max_retries=3)
 req_session.mount('https://', adapter)
 req_session.mount('http://', adapter)
 
-JCD_NAME = {
-    1:"桐生", 2:"戸田", 3:"江戸川", 4:"平和島",
-    5:"多摩川", 6:"浜名湖", 7:"蒲郡", 8:"常滑",
-    9:"津", 10:"三国", 11:"びわこ", 12:"住之江",
-    13:"尼崎", 14:"鳴門", 15:"丸亀", 16:"児島",
-    17:"宮島", 18:"徳山", 19:"下関", 20:"若松",
-    21:"芦屋", 22:"福岡", 23:"唐津", 24:"大村"
-}
+JCD_NAME = {}
+JCD_NAME[1] = "桐生"
+JCD_NAME[2] = "戸田"
+JCD_NAME[3] = "江戸川"
+JCD_NAME[4] = "平和島"
+JCD_NAME[5] = "多摩川"
+JCD_NAME[6] = "浜名湖"
+JCD_NAME[7] = "蒲郡"
+JCD_NAME[8] = "常滑"
+JCD_NAME[9] = "津"
+JCD_NAME[10] = "三国"
+JCD_NAME[11] = "びわこ"
+JCD_NAME[12] = "住之江"
+JCD_NAME[13] = "尼崎"
+JCD_NAME[14] = "鳴門"
+JCD_NAME[15] = "丸亀"
+JCD_NAME[16] = "児島"
+JCD_NAME[17] = "宮島"
+JCD_NAME[18] = "徳山"
+JCD_NAME[19] = "下関"
+JCD_NAME[20] = "若松"
+JCD_NAME[21] = "芦屋"
+JCD_NAME[22] = "福岡"
+JCD_NAME[23] = "唐津"
+JCD_NAME[24] = "大村"
 
 @dataclass
 class Racer:
@@ -68,18 +81,18 @@ def calc_extended_stats(racers: List[Racer]) -> List[Dict]:
         s_out = round(r.avg_st - racers[i+1].avg_st, 3) if i < 5 else 0.0
         w_out = round(r.n_win - racers[i+1].n_win, 2) if i < 5 else 0.0
         
-        stats.append({
-            "win_dev": round(r.n_win - avg_win, 2),
-            "motor_dev": round(r.m_2ren - avg_motor, 4),
-            "st_dev": round(avg_st - r.avg_st, 3),
-            "win_rank": win_rates.index(r.n_win) + 1,
-            "motor_rank": motors.index(r.m_2ren) + 1,
-            "st_rank": sts.index(r.avg_st) + 1,
-            "st_diff_in": s_in,
-            "win_diff_in": w_in,
-            "st_diff_out": s_out,
-            "win_diff_out": w_out
-        })
+        d = {}
+        d["win_dev"] = round(r.n_win - avg_win, 2)
+        d["motor_dev"] = round(r.m_2ren - avg_motor, 4)
+        d["st_dev"] = round(avg_st - r.avg_st, 3)
+        d["win_rank"] = win_rates.index(r.n_win) + 1
+        d["motor_rank"] = motors.index(r.m_2ren) + 1
+        d["st_rank"] = sts.index(r.avg_st) + 1
+        d["st_diff_in"] = s_in
+        d["win_diff_in"] = w_in
+        d["st_diff_out"] = s_out
+        d["win_diff_out"] = w_out
+        stats.append(d)
     return stats
 
 @st.cache_resource
@@ -95,19 +108,37 @@ prob2_model = load_lgb_model('lgb_p2_v18_7.txt')
 prob3_model = load_lgb_model('lgb_p3_v18_7.txt')
 
 def get_lgb_features(r: Racer, lane: int, venue: str, rel: Dict) -> list:
-    jcd = {v: k for k, v in JCD_NAME.items()}.get(venue, 1)
-    return [
-        float(jcd), float(lane), float(r.cls_val),
-        float(r.age), float(r.weight), float(r.f_count),
-        float(r.avg_st), float(r.n_win), float(r.n_2ren),
-        float(r.l_win), float(r.l_2ren), float(r.m_2ren),
-        float(r.b_2ren), float(rel["win_dev"]),
-        float(rel["motor_dev"]), float(rel["st_dev"]),
-        float(rel["win_rank"]), float(rel["motor_rank"]),
-        float(rel["st_rank"]), float(rel["st_diff_in"]),
-        float(rel["win_diff_in"]), float(rel["st_diff_out"]),
-        float(rel["win_diff_out"])
-    ]
+    jcd_val = 1
+    for k, v in JCD_NAME.items():
+        if v == venue:
+            jcd_val = k
+            break
+            
+    f = []
+    f.append(float(jcd_val))
+    f.append(float(lane))
+    f.append(float(r.cls_val))
+    f.append(float(r.age))
+    f.append(float(r.weight))
+    f.append(float(r.f_count))
+    f.append(float(r.avg_st))
+    f.append(float(r.n_win))
+    f.append(float(r.n_2ren))
+    f.append(float(r.l_win))
+    f.append(float(r.l_2ren))
+    f.append(float(r.m_2ren))
+    f.append(float(r.b_2ren))
+    f.append(float(rel["win_dev"]))
+    f.append(float(rel["motor_dev"]))
+    f.append(float(rel["st_dev"]))
+    f.append(float(rel["win_rank"]))
+    f.append(float(rel["motor_rank"]))
+    f.append(float(rel["st_rank"]))
+    f.append(float(rel["st_diff_in"]))
+    f.append(float(rel["win_diff_in"]))
+    f.append(float(rel["st_diff_out"]))
+    f.append(float(rel["win_diff_out"]))
+    return f
 
 def rank_all(racers: List[Racer], venue: str):
     out = []
@@ -115,7 +146,10 @@ def rank_all(racers: List[Racer], venue: str):
     for i, r in enumerate(racers):
         lane = i + 1
         features = get_lgb_features(r, lane, venue, rel_stats[i])
-        s, p1, p2, p3 = 0.0, 0.0, 0.0, 0.0
+        s = 0.0
+        p1 = 0.0
+        p2 = 0.0
+        p3 = 0.0
         
         if lgb_model:
             s = round(lgb_model.predict([features])[0] * 10, 2)
@@ -126,22 +160,37 @@ def rank_all(racers: List[Racer], venue: str):
         if prob3_model:
             p3 = round(prob3_model.predict([features])[0] * 100, 1)
             
-        out.append({
-            "lane": lane, "racer": r, "score": s,
-            "1着率": p1, "2着率": p2, "3着率": p3, "rel": rel_stats[i]
-        })
+        d = {}
+        d["lane"] = lane
+        d["racer"] = r
+        d["score"] = s
+        d["1着率"] = p1
+        d["2着率"] = p2
+        d["3着率"] = p3
+        d["rel"] = rel_stats[i]
+        out.append(d)
         
     out.sort(key=lambda x: x["score"], reverse=True)
-    lane1_p = next((x["1着率"] for x in out if x["lane"] == 1), None)
+    lane1_p = None
+    for x in out:
+        if x["lane"] == 1:
+            lane1_p = x["1着率"]
+            break
     return out, lane1_p
 
 def get_bet_probs(ranked: List[Dict]) -> List[Dict]:
-    p1 = {r["lane"]: max(0.1, r["1着率"]) for r in ranked}
-    p2 = {r["lane"]: max(0.1, r["2着率"]) for r in ranked}
-    p3 = {r["lane"]: max(0.1, r["3着率"]) for r in ranked}
-    
+    p1 = {}
+    p2 = {}
+    p3 = {}
+    for r in ranked:
+        p1[r["lane"]] = max(0.1, r["1着率"])
+        p2[r["lane"]] = max(0.1, r["2着率"])
+        p3[r["lane"]] = max(0.1, r["3着率"])
+        
     sum1 = sum(p1.values())
-    p1 = {k: v / sum1 for k, v in p1.items()}
+    for k in p1.keys():
+        p1[k] = p1[k] / sum1
+        
     bet_probs = []
     
     for l1 in range(1, 7):
@@ -152,14 +201,24 @@ def get_bet_probs(ranked: List[Dict]) -> List[Dict]:
                 if l3 in (l1, l2):
                     continue
                 pr_1 = p1[l1]
-                s2 = sum(p2[k] for k in range(1, 7) if k != l1)
+                
+                s2 = 0.0
+                for k in range(1, 7):
+                    if k != l1: s2 += p2[k]
                 pr_2 = p2[l2] / s2 if s2 > 0 else 0
-                s3 = sum(p3[k] for k in range(1, 7) if k not in (l1, l2))
+                
+                s3 = 0.0
+                for k in range(1, 7):
+                    if k not in (l1, l2): s3 += p3[k]
                 pr_3 = p3[l3] / s3 if s3 > 0 else 0
                 
                 prob = pr_1 * pr_2 * pr_3 * 100
                 b_str = str(l1) + "-" + str(l2) + "-" + str(l3)
-                bet_probs.append({"bet": b_str, "prob": round(prob, 2)})
+                
+                d = {}
+                d["bet"] = b_str
+                d["prob"] = round(prob, 2)
+                bet_probs.append(d)
                 
     bet_probs.sort(key=lambda x: x["prob"], reverse=True)
     return bet_probs
@@ -205,11 +264,20 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
                     
     rd = []
     for i in range(6):
-        rd.append({
-            "name": "選手"+str(i+1), "age": 30, "cls": 1,
-            "weight": 50, "f": 0, "st": 0.17, "nw": 0.0,
-            "n2": 0.0, "lw": 0.0, "l2": 0.0, "m2": 0.0, "b2": 0.0
-        })
+        d = {}
+        d["name"] = "選手" + str(i+1)
+        d["age"] = 30
+        d["cls"] = 1
+        d["weight"] = 50
+        d["f"] = 0
+        d["st"] = 0.17
+        d["nw"] = 0.0
+        d["n2"] = 0.0
+        d["lw"] = 0.0
+        d["l2"] = 0.0
+        d["m2"] = 0.0
+        d["b2"] = 0.0
+        rd.append(d)
         
     cls_map = {"A1": 4, "A2": 3, "B1": 2, "B2": 1}
     cur_lbl = ""
@@ -271,17 +339,19 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
                 try: rd[i]["f"] = int(t_no)
                 except: pass
                     
-    if sum(x["nw"] for x in rd) == 0:
+    nws = sum(x["nw"] for x in rd)
+    if nws == 0:
         return None
         
     racers = []
     for x in rd:
-        racers.append(Racer(
+        obj = Racer(
             name=x["name"], age=x["age"], cls_val=x["cls"],
             weight=x["weight"], f_count=x["f"], avg_st=x["st"],
             n_win=x["nw"], n_2ren=x["n2"], l_win=x["lw"],
             l_2ren=x["l2"], m_2ren=x["m2"], b_2ren=x["b2"]
-        ))
+        )
+        racers.append(obj)
         
     return racers, lane_to_rank, payoff, has_result
 
@@ -294,23 +364,21 @@ def fetch_realtime_odds(jcd: int, rno: int, dstr: str):
     u2 = "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 "
     u3 = "Mobile/15E148 Safari/604.1"
     
-    headers = {
-        "User-Agent": u1 + u2 + u3,
-        "Accept": "text/html,application/xhtml+xml,application/xml",
-        "Accept-Language": "ja-JP,ja",
-        "Referer": "https://www.boatrace.jp/"
-    }
+    headers = {}
+    headers["User-Agent"] = u1 + u2 + u3
+    headers["Accept"] = "text/html,application/xhtml+xml,application/xml"
+    headers["Accept-Language"] = "ja-JP,ja"
+    headers["Referer"] = "https://www.boatrace.jp/"
 
     base_sp = "https://www.boatrace.jp/owsp/sp/race/odds3t"
     base_pc = "https://www.boatrace.jp/owpc/pc/race/odds3t"
     
-    urls = [
-        ("公式SP", f"{base_sp}?rno={rno}&jcd={j_str}&hd={dstr}"),
-        ("公式PC", f"{base_pc}?rno={rno}&jcd={j_str}&hd={dstr}"),
-        ("k_fun", f"https://info.kyotei.fun/odds-{dstr}-{j_str}-{rno}.html"),
-        ("k_24", f"https://kyotei24.jp/odds/{dstr}/{j_str}/{rno}.html"),
-        ("u_san", f"http://uchisankaku.sakura.ne.jp/odds?jcd={j_str}&rno={rno}")
-    ]
+    urls = []
+    urls.append(("公式SP", f"{base_sp}?rno={rno}&jcd={j_str}&hd={dstr}"))
+    urls.append(("公式PC", f"{base_pc}?rno={rno}&jcd={j_str}&hd={dstr}"))
+    urls.append(("k_fun", f"https://info.kyotei.fun/odds-{dstr}-{j_str}-{rno}.html"))
+    urls.append(("k_24", f"https://kyotei24.jp/odds/{dstr}/{j_str}/{rno}.html"))
+    urls.append(("u_san", f"http://uchisankaku.sakura.ne.jp/odds?jcd={j_str}&rno={rno}"))
 
     for name, url in urls:
         try:
@@ -356,29 +424,17 @@ def fetch_realtime_odds(jcd: int, rno: int, dstr: str):
 
     return {}, " | ".join(db_log)
 
-st.set_page_config(page_title="v20.8 期待値ハンターAI", layout="wide")
+st.set_page_config(page_title="v20.9 期待値ハンターAI", layout="wide")
 
 st.sidebar.markdown("### ⚙️ 【直前用】期待値＆資金設定")
-ev_threshold = st.sidebar.slider(
-    "【期待値】回収率が何%以上を狙うか",
-    min_value=80, max_value=200, value=110, step=5
-)
+ev_threshold = st.sidebar.slider("【期待値】回収率が何%以上を狙うか", 80, 200, 110, 5)
 
 st.sidebar.markdown("### ⚙️ 【共通】フィルター設定")
-prob_threshold = st.sidebar.slider(
-    "【足切り確率】確率(%)以上",
-    min_value=0.5, max_value=20.0, value=3.0, step=0.5
-)
-max_bets = st.sidebar.slider(
-    "【上限点数】最大(点)まで",
-    min_value=1, max_value=12, value=4, step=1
-)
-bet_amount = st.sidebar.number_input(
-    "【1点の購入金額】(円)",
-    min_value=100, step=100, value=100
-)
+prob_threshold = st.sidebar.slider("【足切り確率】確率(%)以上", 0.5, 20.0, 3.0, 0.5)
+max_bets = st.sidebar.slider("【上限点数】最大(点)まで", 1, 12, 4, 1)
+bet_amount = st.sidebar.number_input("【1点の購入金額】(円)", min_value=100, step=100, value=100)
 
-st.title("🚤 v20.8 期待値ハンター")
+st.title("🚤 v20.9 期待値ハンター")
 st.caption("完全データ主導型AI / 📈 リアルタイムオッズスナイパー")
 
 if not lgb_model:
@@ -388,16 +444,13 @@ tab1, tab2 = st.tabs(["🚀 直前解析", "📊 バックテスト"])
 
 with tab1:
     st.markdown("##### 🚨 現在のオッズを取得し、期待値の高い買い目を抽出。")
-    st.info("💡 **注意**: 「本日開催中で、まだ発走していないレース」を指定。")
+    st.info("💡 注意: 「本日開催中で、まだ発走していないレース」を指定。")
     
     col1, col2 = st.columns(2)
     with col1:
         d_input = st.date_input("日付", value=datetime.now(JST).date())
     with col2:
-        v_idx = st.selectbox(
-            "場", options=list(JCD_NAME.keys()),
-            format_func=lambda x: JCD_NAME[x]
-        )
+        v_idx = st.selectbox("場", options=list(JCD_NAME.keys()), format_func=lambda x: JCD_NAME[x])
     r_idx = st.selectbox("レース", options=list(range(1, 13)))
     
     if st.button("🔍 直前オッズ取得 ＆ 期待値解析", type="primary"):
@@ -425,10 +478,12 @@ with tab1:
                     ev = (prob / 100.0) * odds * 100 
                     
                     if prob >= prob_threshold: 
-                        ev_results.append({
-                            "bet": bet, "prob": prob,
-                            "odds": odds, "ev": round(ev, 1)
-                        })
+                        d = {}
+                        d["bet"] = bet
+                        d["prob"] = prob
+                        d["odds"] = odds
+                        d["ev"] = round(ev, 1)
+                        ev_results.append(d)
                 
                 ev_results.sort(key=lambda x: x["ev"], reverse=True)
                 
@@ -444,21 +499,18 @@ with tab1:
                 for bet in buy_bets_list:
                     try:
                         pattern = [int(x) for x in bet.split("-")]
-                        auto_bet_queue.append({
-                            "venue": JCD_NAME[v_idx],
-                            "race": str(r_idx),
-                            "pattern": pattern,
-                            "amount": str(bet_amount)
-                        })
+                        qd = {}
+                        qd["venue"] = JCD_NAME[v_idx]
+                        qd["race"] = str(r_idx)
+                        qd["pattern"] = pattern
+                        qd["amount"] = str(bet_amount)
+                        auto_bet_queue.append(qd)
                     except:
                         pass
 
                 st.subheader("🤖 全自動購入用データ")
                 if auto_bet_queue:
-                    st.code(
-                        json.dumps(auto_bet_queue, ensure_ascii=False, indent=4),
-                        language="json"
-                    )
+                    st.code(json.dumps(auto_bet_queue, ensure_ascii=False, indent=4), language="json")
                 else:
                     m_n = f"※ 期待値 {ev_threshold}% を超える目はありません。"
                     st.warning(m_n)
@@ -468,13 +520,13 @@ with tab1:
                 disp_ev = []
                 for item in ev_results[:15]: 
                     is_buy = "✅ 購入" if item["bet"] in buy_bets_list else "見送り"
-                    disp_ev.append({
-                        "買い目": item["bet"],
-                        "AI確率": str(item['prob']) + "%",
-                        "直前オッズ": str(item['odds']) + "倍",
-                        "期待値(EV)": str(item['ev']) + "%",
-                        "判定": is_buy
-                    })
+                    d = {}
+                    d["買い目"] = item["bet"]
+                    d["AI確率"] = str(item['prob']) + "%"
+                    d["直前オッズ"] = str(item['odds']) + "倍"
+                    d["期待値(EV)"] = str(item['ev']) + "%"
+                    d["判定"] = is_buy
+                    disp_ev.append(d)
                 st.dataframe(pd.DataFrame(disp_ev), use_container_width=True)
         else:
             st.error("出走表が取得できませんでした。")
@@ -483,21 +535,11 @@ with tab2:
     st.markdown("##### 📝 前日予想による過去の検証（確率のみの判定）")
     c1, c2, c3 = st.columns(3)
     with c1:
-        bt_start = st.date_input(
-            "開始日 ",
-            value=datetime.now(JST).date() - timedelta(days=1)
-        )
+        bt_start = st.date_input("開始日 ", value=datetime.now(JST).date() - timedelta(days=1))
     with c2:
-        bt_end = st.date_input(
-            "終了日 ",
-            value=datetime.now(JST).date() - timedelta(days=1)
-        )
+        bt_end = st.date_input("終了日 ", value=datetime.now(JST).date() - timedelta(days=1))
     with c3:
-        bt_v_idx = st.selectbox(
-            "場を指定",
-            options=[0] + list(JCD_NAME.keys()),
-            format_func=lambda x: "全国（すべて）" if x==0 else JCD_NAME[x]
-        )
+        bt_v_idx = st.selectbox("場を指定", options=[0] + list(JCD_NAME.keys()), format_func=lambda x: "全国（すべて）" if x==0 else JCD_NAME[x])
 
     if st.button("📊 バックテスト実行 ＆ JSON生成", type="primary"):
         days = []
@@ -532,26 +574,11 @@ with tab2:
             buy_bets = filtered_bets[:max_bets]
             
             if not has_result:
-                h_str, p_disp = "⏳", "-"
+                h_str = "⏳"
+                p_disp = "-"
                 a_res = "結果待ち" if buy_bets else "見送り"
                 h_amt = 0
             else:
                 a_res = ""
-                r1 = next((k for k, v in lane_to_rank.items() if str(v) == '1'), None)
-                r2 = next((k for k, v in lane_to_rank.items() if str(v) == '2'), None)
-                r3 = next((k for k, v in lane_to_rank.items() if str(v) == '3'), None)
-                if r1 and r2 and r3:
-                    a_res = str(r1) + "-" + str(r2) + "-" + str(r3)
-
-                if not buy_bets:
-                    h_str, p_disp, h_amt = "ー", "(" + str(payoff) + ")", 0
-                else:
-                    hit = a_res in buy_bets
-                    h_str = "🎯" if hit else "❌"
-                    p_disp = payoff
-                    h_amt = payoff if hit else 0
-            
-            b_str = ",".join(buy_bets) if buy_bets else "見"
-            return {
-                "日付": d, "場": venue_name, "R": r,
-                "買い目": b_str
+                r1 = None
+                r2 = No
