@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v20.4 全艇スコア解析アプリ（スマホコピペ完全対策 ＆ 期待値ハンター版）
+v20.5 全艇スコア解析アプリ（スマホコピペ完全対策 ＆ 期待値ハンター版）
 """
 import re
 import json
@@ -285,7 +285,7 @@ def fetch_realtime_odds(jcd: int, rno: int, dstr: str) -> Dict[str, float]:
             
     return odds_dict
 
-st.set_page_config(page_title="v20.4 期待値ハンターAI", layout="wide")
+st.set_page_config(page_title="v20.5 期待値ハンターAI", layout="wide")
 
 st.sidebar.markdown("### ⚙️ 【直前用】期待値＆資金設定")
 ev_threshold = st.sidebar.slider("【期待値】回収率が何%以上の買い目を狙うか", min_value=80, max_value=200, value=110, step=5)
@@ -295,7 +295,7 @@ prob_threshold = st.sidebar.slider("【足切り確率】確率(%)以上", min_v
 max_bets = st.sidebar.slider("【上限点数】最大(点)まで", min_value=1, max_value=12, value=4, step=1)
 bet_amount = st.sidebar.number_input("【1点の購入金額】(円)", min_value=100, step=100, value=100)
 
-st.title("🚤 v20.4 期待値ハンター (Pure AI)")
+st.title("🚤 v20.5 期待値ハンター (Pure AI)")
 st.caption("完全データ主導型AI / 📈 リアルタイムオッズ強制取得・期待値スナイパー")
 
 if not lgb_model:
