@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v20.1 全艇スコア解析アプリ（スマホコピペ改行エラー対策＆期待値ハンター版）
+v20.2 全艇スコア解析アプリ（リアルタイムオッズ取得ロジック超強化版）
 """
 import re
 import json
@@ -182,9 +182,44 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
     racers = [Racer(name=x["name"], age=x["age"], cls_val=x["cls"], weight=x["weight"], f_count=x["f"], avg_st=x["st"], n_win=x["nw"], n_2ren=x["n2"], l_win=x["lw"], l_2ren=x["l2"], m_2ren=x["m2"], b_2ren=x["b2"]) for x in rd]
     return racers, lane_to_rank, payoff, has_result
 
+# 🌟 超絶強化版：リアルタイムオッズ取得関数
 def fetch_realtime_odds(jcd: int, rno: int, dstr: str) -> Dict[str, float]:
     odds_dict = {}
+    
+    # 【ルート1】ボートレース公式から「120通り強制マッピング」で取得（一番確実）
+    try:
+        url = f"https://www.boatrace.jp/owpc/pc/race/odds3t?rno={rno}&jcd={jcd:02d}&hd={dstr}"
+        r = req_session.get(url, timeout=5)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        
+        # 3連単オッズは必ず「oddsPoint」というクラスに入っている
+        odds_elements = soup.find_all('td', class_='oddsPoint')
+        
+        # 公式は通常120個のオッズセルが規則正しく並んでいるので、上から強制的に買い目と結びつける
+        if len(odds_elements) == 120:
+            idx = 0
+            for l1 in range(1, 7):
+                for l2 in range(1, 7):
+                    if l1 == l2: continue
+                    for l3 in range(1, 7):
+                        if l3 in (l1, l2): continue
+                        
+                        val = odds_elements[idx].get_text(strip=True)
+                        try:
+                            # 文字列が数値に変換できればオッズとして登録（"欠場"などは無視される）
+                            odds_dict[f"{l1}-{l2}-{l3}"] = float(val)
+                        except ValueError:
+                            pass
+                        idx += 1
+                        
+            if len(odds_dict) > 10:
+                return odds_dict
+    except:
+        pass
+
+    # 【ルート2】サードパーティからの取得（公式が落ちた時の保険）
     urls = [
+        f"https://info.kyotei.fun/odds-{dstr}-{jcd:02d}-{rno}.html",
         f"https://kyotei24.jp/odds/{dstr}/{jcd:02d}/{rno}.html",
         f"http://uchisankaku.sakura.ne.jp/odds?jcd={jcd:02d}&rno={rno}"
     ]
@@ -193,7 +228,8 @@ def fetch_realtime_odds(jcd: int, rno: int, dstr: str) -> Dict[str, float]:
             r = req_session.get(url, timeout=5)
             r.encoding = r.apparent_encoding
             html = r.text
-            matches = re.findall(r'([1-6]-[1-6]-[1-6]).*?([1-9]\d{0,3}\.\d)', html, re.DOTALL)
+            # 1-2-3などの文字列とオッズの間のタグを許容する柔軟な正規表現
+            matches = re.findall(r'([1-6]-[1-6]-[1-6])[^\d]*?([1-9]\d{0,3}\.\d)', html)
             if matches:
                 for bet, odds_str in matches:
                     odds_dict[bet.strip()] = float(odds_str)
@@ -201,20 +237,10 @@ def fetch_realtime_odds(jcd: int, rno: int, dstr: str) -> Dict[str, float]:
                     return odds_dict
         except:
             continue
-    try:
-        url = f"https://www.boatrace.jp/owpc/pc/race/odds3t?rno={rno}&jcd={jcd:02d}&hd={dstr}"
-        r = req_session.get(url, timeout=5)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        tbody = soup.find_all('tbody', class_='is-p3-0')
-        if tbody:
-            matches = re.findall(r'([1-6]-[1-6]-[1-6]).*?([1-9]\d{0,3}\.\d)', r.text, re.DOTALL)
-            for bet, odds_str in matches:
-                odds_dict[bet.strip()] = float(odds_str)
-    except:
-        pass
+            
     return odds_dict
 
-st.set_page_config(page_title="v20.1 期待値ハンターAI", layout="wide")
+st.set_page_config(page_title="v20.2 期待値ハンターAI", layout="wide")
 
 st.sidebar.markdown("### ⚙️ 【直前用】期待値＆資金設定")
 ev_threshold = st.sidebar.slider("【期待値】回収率が何%以上の買い目を狙うか", min_value=80, max_value=200, value=110, step=5)
@@ -224,8 +250,8 @@ prob_threshold = st.sidebar.slider("【足切り確率】確率(%)以上", min_v
 max_bets = st.sidebar.slider("【上限点数】最大(点)まで", min_value=1, max_value=12, value=4, step=1)
 bet_amount = st.sidebar.number_input("【1点の購入金額】(円)", min_value=100, step=100, value=100)
 
-st.title("🚤 v20.1 期待値ハンター (Pure AI)")
-st.caption("完全データ主導型AI / 📈 直前オッズ連動・期待値スナイパー")
+st.title("🚤 v20.2 期待値ハンター (Pure AI)")
+st.caption("完全データ主導型AI / 📈 リアルタイムオッズ強制取得・期待値スナイパー")
 
 if not lgb_model:
     st.warning("⚠️ v18.7用のAIモデルが見つかりません。")
@@ -247,7 +273,7 @@ with tab1:
             ranked, _ = rank_all(racers, JCD_NAME[v_idx])
             bet_probs = get_bet_probs(ranked)
             
-            with st.spinner("外部サイトからリアルタイムオッズを取得中..."):
+            with st.spinner("公式＆外部サイトからリアルタイムオッズを取得中..."):
                 realtime_odds = fetch_realtime_odds(v_idx, r_idx, dstr)
             
             if not realtime_odds:
@@ -367,7 +393,6 @@ with tab2:
                 total_invest = sum(m["点数"] for m in bet_races if m["的中"] != "⏳") * bet_amount
                 total_return = sum(m["_hit_amount"] for m in bet_races if m["的中"] != "⏳") * (bet_amount / 100)
                 
-                # エラー対策：表示用の文字列を細かく変数に分けて構成
                 target_cnt = len(bet_races)
                 skip_cnt = len([m for m in matches if m['点数']==0])
                 msg_success = f"🔥 勝負対象: {target_cnt}件 (見送り: {skip_cnt}件)"
@@ -389,16 +414,4 @@ with tab2:
                         bets = row["買い目"].split(",")
                         for bet in bets:
                             try:
-                                pattern = [int(x) for x in bet.split("-")]
-                                auto_bet_queue.append({
-                                    "venue": row["場"],
-                                    "race": str(row["R"]),
-                                    "pattern": pattern,
-                                    "amount": str(bet_amount)
-                                })
-                            except: pass
-                
-                if auto_bet_queue:
-                    st.markdown("---")
-                    st.subheader("🤖 全自動購入用データ")
-                    st.code(json.dumps(auto_bet_queue, ensure_ascii=False, indent=4), language="json")
+        
