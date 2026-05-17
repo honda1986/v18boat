@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-v20.3 全艇スコア解析アプリ（インデントエラー・スマホコピペ対策 ＆ 期待値ハンター版）
+v20.4 全艇スコア解析アプリ（スマホコピペ完全対策 ＆ 期待値ハンター版）
 """
 import re
 import json
@@ -117,12 +117,12 @@ def get_bet_probs(ranked: List[Dict]) -> List[Dict]:
                 sum3 = sum(p3[k] for k in range(1, 7) if k not in (l1, l2))
                 prob_3rd = p3[l3] / sum3 if sum3 > 0 else 0
                 prob = prob_1st * prob_2nd * prob_3rd * 100
-                bet_probs.append({"bet": f"{l1}-{l2}-{l3}", "prob": round(prob, 2)})
+                bet_probs.append({"bet": str(l1) + "-" + str(l2) + "-" + str(l3), "prob": round(prob, 2)})
     bet_probs.sort(key=lambda x: x["prob"], reverse=True)
     return bet_probs
 
 def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
-    url = f"https://info.kyotei.fun/info-{dstr}-{jcd:02d}-{rno}.html"
+    url = "https://info.kyotei.fun/info-" + dstr + "-" + str(jcd).zfill(2) + "-" + str(rno) + ".html"
     try:
         r = req_session.get(url, timeout=7)
         r.encoding = r.apparent_encoding
@@ -158,7 +158,7 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
                 if ptxt.isdigit():
                     payoff = int(ptxt)
                     
-    rd = [{"name": f"選手{i+1}", "age": 30, "cls": 1, "weight": 50, "f": 0, "st": 0.17, "nw": 0.0, "n2": 0.0, "lw": 0.0, "l2": 0.0, "m2": 0.0, "b2": 0.0} for i in range(6)]
+    rd = [{"name": "選手"+str(i+1), "age": 30, "cls": 1, "weight": 50, "f": 0, "st": 0.17, "nw": 0.0, "n2": 0.0, "lw": 0.0, "l2": 0.0, "m2": 0.0, "b2": 0.0} for i in range(6)]
     cls_map = {"A1": 4, "A2": 3, "B1": 2, "B2": 1}
     current_label = ""
     for tr in soup.find_all('tr'):
@@ -233,9 +233,10 @@ def fetch_kyotei24_data(jcd: int, rno: int, dstr: str):
 
 def fetch_realtime_odds(jcd: int, rno: int, dstr: str) -> Dict[str, float]:
     odds_dict = {}
+    jcd_str = str(jcd).zfill(2)
     
     try:
-        url = f"https://www.boatrace.jp/owpc/pc/race/odds3t?rno={rno}&jcd={jcd:02d}&hd={dstr}"
+        url = "https://www.boatrace.jp/owpc/pc/race/odds3t?rno=" + str(rno) + "&jcd=" + jcd_str + "&hd=" + dstr
         r = req_session.get(url, timeout=5)
         soup = BeautifulSoup(r.text, 'html.parser')
         odds_elements = soup.find_all('td', class_='oddsPoint')
@@ -252,7 +253,8 @@ def fetch_realtime_odds(jcd: int, rno: int, dstr: str) -> Dict[str, float]:
                         
                         val = odds_elements[idx].get_text(strip=True)
                         try:
-                            odds_dict[f"{l1}-{l2}-{l3}"] = float(val)
+                            bet_str = str(l1) + "-" + str(l2) + "-" + str(l3)
+                            odds_dict[bet_str] = float(val)
                         except ValueError:
                             pass
                         idx += 1
@@ -263,9 +265,9 @@ def fetch_realtime_odds(jcd: int, rno: int, dstr: str) -> Dict[str, float]:
         pass
 
     urls = [
-        f"https://info.kyotei.fun/odds-{dstr}-{jcd:02d}-{rno}.html",
-        f"https://kyotei24.jp/odds/{dstr}/{jcd:02d}/{rno}.html",
-        f"http://uchisankaku.sakura.ne.jp/odds?jcd={jcd:02d}&rno={rno}"
+        "https://info.kyotei.fun/odds-" + dstr + "-" + jcd_str + "-" + str(rno) + ".html",
+        "https://kyotei24.jp/odds/" + dstr + "/" + jcd_str + "/" + str(rno) + ".html",
+        "http://uchisankaku.sakura.ne.jp/odds?jcd=" + jcd_str + "&rno=" + str(rno)
     ]
     for url in urls:
         try:
@@ -283,7 +285,7 @@ def fetch_realtime_odds(jcd: int, rno: int, dstr: str) -> Dict[str, float]:
             
     return odds_dict
 
-st.set_page_config(page_title="v20.3 期待値ハンターAI", layout="wide")
+st.set_page_config(page_title="v20.4 期待値ハンターAI", layout="wide")
 
 st.sidebar.markdown("### ⚙️ 【直前用】期待値＆資金設定")
 ev_threshold = st.sidebar.slider("【期待値】回収率が何%以上の買い目を狙うか", min_value=80, max_value=200, value=110, step=5)
@@ -293,7 +295,7 @@ prob_threshold = st.sidebar.slider("【足切り確率】確率(%)以上", min_v
 max_bets = st.sidebar.slider("【上限点数】最大(点)まで", min_value=1, max_value=12, value=4, step=1)
 bet_amount = st.sidebar.number_input("【1点の購入金額】(円)", min_value=100, step=100, value=100)
 
-st.title("🚤 v20.3 期待値ハンター (Pure AI)")
+st.title("🚤 v20.4 期待値ハンター (Pure AI)")
 st.caption("完全データ主導型AI / 📈 リアルタイムオッズ強制取得・期待値スナイパー")
 
 if not lgb_model:
@@ -355,7 +357,8 @@ with tab1:
                 if auto_bet_queue:
                     st.code(json.dumps(auto_bet_queue, ensure_ascii=False, indent=4), language="json")
                 else:
-                    st.warning(f"※ 現在のオッズでは期待値が {ev_threshold}% を超える買い目はありません。")
+                    msg_none = "※ 現在のオッズでは期待値が " + str(ev_threshold) + "% を超える買い目はありません。"
+                    st.warning(msg_none)
                 
                 st.markdown("---")
                 st.subheader("🎯 買い目別 期待値ランキング")
@@ -364,9 +367,9 @@ with tab1:
                     is_buy = "✅ 購入" if item["bet"] in buy_bets_list else "見送り"
                     disp_ev.append({
                         "買い目": item["bet"],
-                        "AI確率": f"{item['prob']}%",
-                        "直前オッズ": f"{item['odds']}倍",
-                        "期待値(EV)": f"{item['ev']}%",
+                        "AI確率": str(item['prob']) + "%",
+                        "直前オッズ": str(item['odds']) + "倍",
+                        "期待値(EV)": str(item['ev']) + "%",
                         "判定": is_buy
                     })
                 st.dataframe(pd.DataFrame(disp_ev), use_container_width=True)
@@ -406,10 +409,10 @@ with tab2:
                 r2 = next((k for k, v in lane_to_rank.items() if str(v) == '2'), None)
                 r3 = next((k for k, v in lane_to_rank.items() if str(v) == '3'), None)
                 if r1 and r2 and r3:
-                    actual_result = f"{r1}-{r2}-{r3}"
+                    actual_result = str(r1) + "-" + str(r2) + "-" + str(r3)
 
                 if not buy_bets:
-                    hit_str, payoff_disp, hit_amount = "ー", f"({payoff})", 0
+                    hit_str, payoff_disp, hit_amount = "ー", "(" + str(payoff) + ")", 0
                 else:
                     hit = actual_result in buy_bets
                     hit_str, payoff_disp, hit_amount = ("🎯" if hit else "❌"), payoff, (payoff if hit else 0)
@@ -440,14 +443,7 @@ with tab2:
                 total_invest = sum(m["点数"] for m in bet_races if m["的中"] != "⏳") * bet_amount
                 total_return = sum(m["_hit_amount"] for m in bet_races if m["的中"] != "⏳") * (bet_amount / 100)
                 
-                target_cnt = len(bet_races)
-                skip_cnt = len([m for m in matches if m['点数']==0])
-                msg_success = f"🔥 勝負対象: {target_cnt}件 (見送り: {skip_cnt}件)"
-                st.success(msg_success)
-
-                if total_invest > 0:
-                    ret_rate = (total_return / total_invest) * 100
-                    inv_str = f"💰 **総投資**: {total_invest:,.0f}円"
-                    ret_str = f"**総回収**: {total_return:,.0f}円"
-                    rate_str = f"(回収率: {ret_rate:.1f}%)"
-                    st.info(f"{in
+                target_cnt = str(len(bet_races))
+                skip_cnt = str(len([m for m in matches if m['点数']==0]))
+                msg_success = "🔥 勝負対象: " + target_cnt + "件 (見送り: " + skip_cnt + "件)"
+                st.succe
