@@ -269,17 +269,27 @@ with tab2:
             ranked, _ = rank_all(racers, venue_name)
             
             bet_probs = get_bet_probs(ranked)
+            prob_dict = {bp["bet"]: bp["prob"] for bp in bet_probs} # 勝率引き当て用辞書
+            
             filtered_bets = [bp["bet"] for bp in bet_probs if bp["prob"] >= prob_threshold]
             buy_bets = filtered_bets[:max_bets]
             
+            # 買い目に勝率（確率）を付与した表示用文字列を作成
+            buy_bets_disp = ",".join([f"{b}({prob_dict.get(b, 0.0)}%)" for b in buy_bets]) if buy_bets else "見"
+            
             if not has_result:
-                hit_str, payoff_disp, actual_result, hit_amount = "⏳", "-", "結果待ち" if buy_bets else "見送り", 0
+                actual_result = "結果待ち" if buy_bets else "見送り"
+                actual_result_disp = actual_result
+                hit_str, payoff_disp, hit_amount = "⏳", "-", 0
             else:
                 actual_result = ""
+                actual_result_disp = ""
                 r1 = next((k for k, v in lane_to_rank.items() if str(v) == '1'), None)
                 r2 = next((k for k, v in lane_to_rank.items() if str(v) == '2'), None)
                 r3 = next((k for k, v in lane_to_rank.items() if str(v) == '3'), None)
-                if r1 and r2 and r3: actual_result = f"{r1}-{r2}-{r3}"
+                if r1 and r2 and r3: 
+                    actual_result = f"{r1}-{r2}-{r3}"
+                    actual_result_disp = f"{actual_result}({prob_dict.get(actual_result, 0.0)}%)" # 結果に勝率（確率）を付与
 
                 if not buy_bets:
                     hit_str, payoff_disp, hit_amount = "ー", f"({payoff})", 0
@@ -289,8 +299,12 @@ with tab2:
             
             return {
                 "日付": d, "場": venue_name, "R": r,
-                "買い目": ",".join(buy_bets) if buy_bets else "見", "点数": len(buy_bets), 
-                "結果": actual_result, "的中": hit_str, "払戻金": payoff_disp, "_hit_amount": hit_amount
+                "買い目": ",".join(buy_bets) if buy_bets else "見", # JSON出力用にピュアな文字列を維持
+                "買い目(勝率)": buy_bets_disp, # データフレーム表示用
+                "点数": len(buy_bets), 
+                "結果": actual_result, 
+                "結果(勝率)": actual_result_disp, # データフレーム表示用
+                "的中": hit_str, "払戻金": payoff_disp, "_hit_amount": hit_amount
             }
             
         with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
@@ -318,7 +332,8 @@ with tab2:
                 if total_invest > 0:
                     st.info(f"💰 **総投資**: {total_invest:,.0f}円 / **総回収**: {total_return:,.0f}円 (回収率: {ret_rate:.1f}%)")
                 
-                disp_cols = ["日付", "場", "R", "買い目", "結果", "的中", "払戻金"]
+                # 🌟 データフレームには勝率が付加されたカラムのみを表示する
+                disp_cols = ["日付", "場", "R", "買い目(勝率)", "結果(勝率)", "的中", "払戻金"]
                 st.dataframe(df_bt[disp_cols], use_container_width=True)
 
                 # 🌟 ご指定のJSON生成ロジック
